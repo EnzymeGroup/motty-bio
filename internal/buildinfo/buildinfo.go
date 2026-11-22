@@ -15,3 +15,12 @@ const Development = development
 // copy this way instead of renaming the product inside its own interface; an
 // empty label means no badge.
 const DockBadge = dockBadge
+
+// VariantSuffix marks this local derivative build based on the upstream version
+// (e.g. 0.4.24 -> 0.4.24-bio.1) without colliding with the next upstream patch.
+const VariantSuffix = "-bio.1"
+
+// DisplayVersion returns base with VariantSuffix appended.
+func DisplayVersion(base string) string {
+	return base + VariantSuffix
+}

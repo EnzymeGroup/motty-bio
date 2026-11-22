@@ -10,6 +10,7 @@ import (
 	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 	"motty/assets"
+	"motty/internal/buildinfo"
 	"motty/internal/i18n"
 	"motty/internal/update"
 )
@@ -104,7 +105,7 @@ var aboutFacts = sync.OnceValue(func() aboutBuildInfo {
 
 func readAboutFacts(info *debug.BuildInfo) aboutBuildInfo {
 	facts := aboutBuildInfo{
-		version:  update.Current,
+		version:  buildinfo.DisplayVersion(update.Current),
 		platform: aboutPlatform(runtime.GOOS, runtime.GOARCH),
 		runtime:  runtime.Version(),
 	}

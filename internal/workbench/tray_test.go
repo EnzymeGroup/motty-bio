@@ -339,7 +339,7 @@ func TestTrayHostsFollowTheirGroupTree(t *testing.T) {
 
 func TestTrayTooltipChangesOnlyWhenTheCountDoes(t *testing.T) {
 	fixture := newTrayFixture(t)
-	name := buildinfo.ProductName + " " + update.Current
+	name := buildinfo.ProductName + " " + buildinfo.DisplayVersion(update.Current)
 	text, changed := fixture.tray.Tooltip()
 	if !changed || text != name+" (3 open)" {
 		t.Fatalf("first tooltip = %q, %t", text, changed)
@@ -372,7 +372,7 @@ func TestTrayUsesTheBuildProductNameInBothLanguages(t *testing.T) {
 			state.messages = i18n.For(test.language)
 			tray := NewTray(nil)
 			tray.Add(state, &fakeTrayWindow{})
-			if text, changed := tray.Tooltip(); !changed || text != buildinfo.ProductName+" "+update.Current {
+			if text, changed := tray.Tooltip(); !changed || text != buildinfo.ProductName+" "+buildinfo.DisplayVersion(update.Current) {
 				t.Fatalf("empty tooltip = %q, %t", text, changed)
 			}
 			menu := tray.Menu()

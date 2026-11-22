@@ -76,7 +76,7 @@ func (tray *Tray) Tooltip() (text string, changed bool) {
 	}
 	tray.count = count
 	messages := tray.members[0].state.messages
-	version := update.Current
+	version := buildinfo.DisplayVersion(update.Current)
 	if count == 0 {
 		tray.tooltip = fmt.Sprintf(productText(messages.TrayTooltipEmpty), version)
 	} else {

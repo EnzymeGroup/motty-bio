@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vivaui/viva/app"
+	"motty/internal/buildinfo"
 	"motty/internal/crashlog"
 	"motty/internal/diag"
 	"motty/internal/sshconn"
@@ -119,7 +120,7 @@ func (state *State) diagnosticReport() string {
 
 	report.Section("Motty diagnostics")
 	report.Fact("created", now.UTC().Format(time.RFC3339))
-	report.Fact("version", update.Current)
+	report.Fact("version", buildinfo.DisplayVersion(update.Current))
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
 			switch setting.Key {
