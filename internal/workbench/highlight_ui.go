@@ -491,11 +491,19 @@ func (state *State) restoreTerminalTools(saved savedState) {
 	}
 	state.refreshSnippets()
 	state.commands.shown = saved.CommandsShown
+	state.commands.placement = commandsPlacementBottom
+	if saved.CommandsSide {
+		state.commands.placement = commandsPlacementSide
+	}
 	state.commands.sort = commandsSortFromString(saved.CommandsSort)
 	state.commands.width = saved.CommandsWidth
 	state.commands.hiddenGroups = make(map[string]bool)
 	for _, group := range saved.CommandsHiddenGroups {
 		state.commands.hiddenGroups[group] = true
+	}
+	state.commands.collapsedGroups = make(map[string]bool)
+	for _, group := range saved.CommandsCollapsedGroups {
+		state.commands.collapsedGroups[group] = true
 	}
 	state.recompileHighlights()
 }
