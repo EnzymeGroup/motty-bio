@@ -281,6 +281,14 @@ iframe#viewer {
   pointer-events: none;
 }
 .legend.visible { display: flex; }
+.plddt-mean {
+  font-weight: 600;
+  color: var(--fg);
+  padding-right: 6px;
+  border-right: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.plddt-mean:empty { display: none; }
 .swatch { display: inline-flex; align-items: center; gap: 4px; }
 .swatch i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
 .seq-panel {
@@ -323,6 +331,10 @@ iframe#viewer {
   border-radius: 3px;
   cursor: pointer;
   color: var(--fg);
+  border-bottom: 2px solid transparent;
+}
+.seq-panel.plddt-mode .res[data-plddt-color] {
+  border-bottom-color: var(--plddt-color, transparent);
 }
 .res:hover { background: var(--surface-2); }
 .res.selected { background: var(--accent); color: #fff; font-weight: 600; }
@@ -393,6 +405,7 @@ iframe#viewer {
   <div id="overlay" class="overlay"><div class="spinner"></div><div id="overlay-text">Loading Mol* viewer...</div></div>
   <div id="pill" class="pill">Initializing...</div>
   <div id="plddt-legend" class="legend">
+    <span id="plddt-mean" class="plddt-mean"></span>
     <span class="swatch"><i style="background:#0053d6"></i>&gt;90</span>
     <span class="swatch"><i style="background:#65cbf3"></i>70–90</span>
     <span class="swatch"><i style="background:#ffdb13"></i>50–70</span>
@@ -417,6 +430,7 @@ const seqBtn = document.getElementById('seq-btn');
 const spinBtn = document.getElementById('spin-btn');
 const seqPanel = document.getElementById('seq-panel');
 const plddtLegend = document.getElementById('plddt-legend');
+const plddtMeanEl = document.getElementById('plddt-mean');
 const modelNav = document.getElementById('model-nav');
 const modelLabel = document.getElementById('model-label');
 const modelPrev = document.getElementById('model-prev');
@@ -443,8 +457,35 @@ let waterVisible = true;
 let spinning = false;
 let modelCount = 1;
 let modelIndex = 0;
+let plddtInfo = null;
+const residueMeta = new Map();
 
 function send(cmd) { sendViewerCommand(frame, cmd); }
+
+function plddtBandColor(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return '';
+  if (v <= 50) return '#ff7d45';
+  if (v <= 70) return '#ffdb13';
+  if (v <= 90) return '#65cbf3';
+  return '#0053d6';
+}
+
+function syncPlddtLegend() {
+  if (currentPalette !== 'plddt') {
+    plddtLegend.classList.remove('visible');
+    seqPanel.classList.remove('plddt-mode');
+    return;
+  }
+  plddtLegend.classList.add('visible');
+  seqPanel.classList.add('plddt-mode');
+  if (plddtInfo?.available && Number.isFinite(plddtInfo.mean)) {
+    plddtMeanEl.textContent = `Mean ${plddtInfo.mean.toFixed(1)}`;
+  } else if (plddtInfo && !plddtInfo.available) {
+    plddtMeanEl.textContent = 'No pLDDT';
+  } else {
+    plddtMeanEl.textContent = '';
+  }
+}
 
 function applyHostTheme(dark, bg) {
   meta.dark = Boolean(dark);
@@ -457,7 +498,7 @@ function applyHostTheme(dark, bg) {
 function syncStyleUI() {
   for (const btn of modeButtons) btn.classList.toggle('active', btn.dataset.mode === currentMode);
   paletteEl.value = currentPalette;
-  plddtLegend.classList.toggle('visible', currentPalette === 'plddt');
+  syncPlddtLegend();
 }
 
 function syncModelUI() {
@@ -509,6 +550,9 @@ function setSelectedResidueHighlight(chain, residue) {
 }
 
 function renderSequence(info) {
+  plddtInfo = info?.plddt || null;
+  residueMeta.clear();
+  syncPlddtLegend();
   seqPanel.replaceChildren();
   const chains = info?.chains || [];
   if (!chains.length) {
@@ -517,6 +561,7 @@ function renderSequence(info) {
     return;
   }
   seqBtn.style.display = '';
+  const scoreLabel = plddtInfo?.isPredicted || currentPalette === 'plddt' ? 'pLDDT' : 'B';
   for (const chain of chains) {
     const row = document.createElement('div');
     row.className = 'chain-row';
@@ -527,12 +572,22 @@ function renderSequence(info) {
     list.className = 'residues';
     const frag = document.createDocumentFragment();
     for (const r of chain.residues || []) {
+      residueMeta.set(`${chain.id}:${r.id}`, { name: r.name, plddt: r.plddt });
       const span = document.createElement('span');
       span.className = 'res';
       span.textContent = r.code || 'X';
       span.dataset.chain = chain.id;
       span.dataset.res = r.id;
-      span.title = `${chain.id}:${r.id} (${r.name})`;
+      if (typeof r.plddt === 'number' && Number.isFinite(r.plddt)) {
+        const band = plddtBandColor(r.plddt);
+        if (band) {
+          span.dataset.plddtColor = band;
+          span.style.setProperty('--plddt-color', band);
+        }
+        span.title = `${chain.id}:${r.id} (${r.name}) · ${scoreLabel} ${r.plddt.toFixed(1)}`;
+      } else {
+        span.title = `${chain.id}:${r.id} (${r.name})`;
+      }
       frag.appendChild(span);
     }
     list.appendChild(frag);
@@ -726,7 +781,16 @@ subscribeViewer(frame, (event) => {
     target = { chain: event.chain || '', residue: event.residue ?? null };
     setSelectedResidueHighlight(target.chain, target.residue);
     if (event.residue != null) {
-      pill.textContent = `Selected ${event.chain}:${event.residue} · ${event.atoms} atoms`;
+      const rm = residueMeta.get(`${event.chain}:${event.residue}`);
+      const resLabel = rm?.name ? `${event.chain}:${event.residue} (${rm.name})` : `${event.chain}:${event.residue}`;
+      const scorePart = typeof rm?.plddt === 'number' && Number.isFinite(rm.plddt)
+        ? (currentPalette === 'plddt' || plddtInfo?.isPredicted
+            ? ` · pLDDT ${rm.plddt.toFixed(1)}`
+            : currentPalette === 'bfactor'
+              ? ` · B-factor ${rm.plddt.toFixed(1)}`
+              : '')
+        : '';
+      pill.textContent = `Selected ${resLabel}${scorePart} · ${event.atoms} atoms`;
     } else {
       pill.textContent = meta.summary || `${event.atoms} atoms`;
     }

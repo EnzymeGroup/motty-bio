@@ -1,9 +1,13 @@
 // Fixed Mol* commands in an opaque-origin sandbox. No network or arbitrary scripts.
-let viewer, plugin, structure, polymer, representation, water, waterComponent, ligandComponent, selection;
+let viewer, plugin, structure, polymer, representation, water, waterComponent, ligandComponent, ligandRep, ionComponent, ionRep, selection;
 let mode = "cartoon",
 	palette = "secondary",
 	visible = true,
-	spinning = false;
+	spinning = false,
+	isSmallMolecule = false,
+	currentIsPredicted = false,
+	ligandColorSig = "",
+	ionColorSig = "";
 let baseStyle = { mode, palette },
 	background = 0xf7f7f8,
 	dark = false,
@@ -29,7 +33,7 @@ let presentation = { preset: "standard", background: "theme" };
 const loadedAssets = new Map();
 function rememberAsset() {
   if (!structure || !assetId) return;
-  loadedAssets.set(assetId, { structure, polymer, representation, water, waterComponent, ligandComponent, selection, mode, palette, visible, baseStyle, selectedRequest, styledComponents, styledRepresentations, assetId, assetVersion, sceneRevision, sceneSelection, waterVisible,
+  loadedAssets.set(assetId, { structure, polymer, representation, water, waterComponent, ligandComponent, ligandRep, ionComponent, ionRep, selection, mode, palette, visible, isSmallMolecule, currentIsPredicted, ligandColorSig, ionColorSig, baseStyle, selectedRequest, styledComponents, styledRepresentations, assetId, assetVersion, sceneRevision, sceneSelection, waterVisible,
     maps: [localStyles, layers, residueIndex, chainIndex, atomIndex, componentIndex, sceneLayers, measurements].map(m => [...m]) });
 }
 function activateAsset(id) {
@@ -37,7 +41,7 @@ function activateAsset(id) {
   const next = loadedAssets.get(id);
   if (!next) throw Error("Structure is not loaded");
   rememberAsset();
-  ({ structure, polymer, representation, water, waterComponent, ligandComponent, selection, mode, palette, visible, baseStyle, selectedRequest, styledComponents, styledRepresentations, assetId, assetVersion, sceneRevision, sceneSelection, waterVisible } = next);
+  ({ structure, polymer, representation, water, waterComponent, ligandComponent, ligandRep, ionComponent, ionRep, selection, mode, palette, visible, isSmallMolecule, currentIsPredicted, ligandColorSig, ionColorSig, baseStyle, selectedRequest, styledComponents, styledRepresentations, assetId, assetVersion, sceneRevision, sceneSelection, waterVisible } = next);
   [localStyles, layers, residueIndex, chainIndex, atomIndex, componentIndex, sceneLayers, measurements].forEach((m, i) => { m.clear(); for (const [key, value] of next.maps[i]) m.set(key, value); });
   if (selection) plugin.managers.interactivity.lociSelects.selectOnly({ loci: selection });
   else plugin.managers.interactivity.lociSelects.deselectAll();
@@ -137,29 +141,253 @@ function indexResidues() {
 	}
 	for (const index of [residueIndex, chainIndex, atomIndex, componentIndex]) finishIndex(index);
 }
+const PLDDT_NO_SCORE = 0xaaaaaa;
+const PLDDT_VERY_LOW = 0xff7d45;
+const PLDDT_LOW = 0xffdb13;
+const PLDDT_CONFIDENT = 0x65cbf3;
+const PLDDT_VERY_HIGH = 0x0053d6;
+
+function plddtColorFor(value) {
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return PLDDT_NO_SCORE;
+	if (value <= 50) return PLDDT_VERY_LOW;
+	if (value <= 70) return PLDDT_LOW;
+	if (value <= 90) return PLDDT_CONFIDENT;
+	return PLDDT_VERY_HIGH;
+}
+
+function qualityAssessmentValue(model) {
+	if (!plugin || !model) return null;
+	try {
+		return plugin.customModelProperties.get("ma_quality_assessment")?.get(model)?.value || null;
+	} catch {
+		return null;
+	}
+}
+
+async function attachQualityAssessment(structData) {
+	if (!plugin || !structData?.models?.length) return;
+	let provider;
+	try {
+		provider = plugin.customModelProperties.get("ma_quality_assessment");
+	} catch {
+		return;
+	}
+	if (!provider) return;
+	const ctx = {
+		runtime: plugin.managers?.task?.runtime,
+		assetManager: plugin.managers?.asset,
+		errorContext: plugin.errorContext,
+	};
+	for (const m of structData.models) {
+		try {
+			if (provider.isApplicable(m)) await provider.attach(ctx, m, undefined, true);
+		} catch {}
+	}
+}
+
+function getModelPlddtContext(model) {
+	if (!model) return { source: "none", scale: 1, maMap: null, available: false, mean: 0, min: 0, max: 0 };
+	const qa = qualityAssessmentValue(model);
+	const maMap = qa?.pLDDT;
+	if (maMap && maMap.size > 0) {
+		let min = Infinity, max = -Infinity, sum = 0, count = 0, hasNonZero = false;
+		for (const v of maMap.values()) {
+			if (typeof v !== "number" || !Number.isFinite(v)) continue;
+			if (v !== 0) hasNonZero = true;
+			if (v < min) min = v;
+			if (v > max) max = v;
+			sum += v;
+			count++;
+		}
+		if (count > 0 && hasNonZero && max > 0) {
+			const scale = min >= -0.001 && max <= 1.0001 ? 100 : 1;
+			return { source: "ma_qa", scale, maMap, available: true, mean: (sum / count) * scale, min: min * scale, max: max * scale };
+		}
+	}
+	const bCol = model.atomicConformation?.B_iso_or_equiv;
+	const n = bCol?.rowCount || 0;
+	if (bCol?.isDefined && n > 0) {
+		let min = Infinity, max = -Infinity, sum = 0, count = 0, hasNonZero = false;
+		for (let i = 0; i < n; i++) {
+			const v = bCol.value(i);
+			if (typeof v !== "number" || !Number.isFinite(v)) continue;
+			if (v !== 0) hasNonZero = true;
+			if (v < min) min = v;
+			if (v > max) max = v;
+			sum += v;
+			count++;
+		}
+		if (count > 0 && hasNonZero && max > 0) {
+			const scale = min >= -0.001 && max <= 1.0001 ? 100 : 1;
+			return { source: "bfactor", scale, maMap: null, available: true, mean: (sum / count) * scale, min: min * scale, max: max * scale };
+		}
+	}
+	return { source: "none", scale: 1, maMap: null, available: false, mean: 0, min: 0, max: 0 };
+}
+
+function plddtValueAt(unit, element, ctx) {
+	if (!ctx?.available || unit.kind !== 0) return Number.NaN;
+	if (ctx.maMap) {
+		const ri = unit.model.atomicHierarchy.residueAtomSegments.index[element];
+		const v = ctx.maMap.get(ri);
+		if (typeof v === "number" && Number.isFinite(v)) return v * ctx.scale;
+	}
+	const v = unit.model.atomicConformation.B_iso_or_equiv.value(element);
+	return typeof v === "number" && Number.isFinite(v) ? v * ctx.scale : Number.NaN;
+}
+
+function isExperimentalModel(model, rawContent) {
+	const M = molstar.lib.structure.Model;
+	if (M?.isExperimental?.(model)) return true;
+	const db = model?.sourceData?.data?.db;
+	if (db?.exptl?.method?.rowCount > 0) return true;
+	if (db?.refine?.ls_d_res_high?.rowCount > 0) return true;
+	if (typeof rawContent === "string") {
+		const head = rawContent.slice(0, 16384);
+		if (/^(?:EXPDTA|REMARK\s+2\s+RESOLUTION\.)/m.test(head)) return true;
+		if (/_exptl\.method\b/i.test(head)) return true;
+	}
+	return false;
+}
+
+function isPredictedPlddtStructure(structData, assetName, rawContent) {
+	const m = structData?.models?.[0];
+	if (!m) return false;
+	const ctx = getModelPlddtContext(m);
+	if (!ctx.available) return false;
+	if (ctx.source === "ma_qa") return true;
+	if (isExperimentalModel(m, rawContent)) return false;
+	const db = m.sourceData?.data?.db;
+	if (db?.ma_model_list?.ordinal_id?.rowCount > 0) return true;
+	const head = typeof rawContent === "string" ? rawContent.slice(0, 16384) : "";
+	if (/(?:alphafold|colabfold|openfold|esmfold|boltz|protenix|chai-?1|rosettafold|_ma_model_list|_ma_qa_metric)/i.test(head)) {
+		return ctx.max <= 100.01;
+	}
+	const name = String(assetName || "").toLowerCase();
+	if (/(?:^|[-_./])(?:model(?:_\d+)?|af[23]|alphafold|colabfold|boltz|protenix|esmfold|chai|rank_?\d+|ranked_\d+|unrelaxed|relaxed|pred(?:ict(?:ed|ion)?)?)(?:[-_.]|$)/i.test(name)) {
+		return ctx.max <= 100.01;
+	}
+	if (ctx.scale === 100) return true;
+	return ctx.min >= 0 && ctx.max <= 100.01 && ctx.mean >= 50 && ctx.max >= 70;
+}
+
+function registerPlddtTheme(pluginInstance) {
+	const registry = pluginInstance?.representation?.structure?.themes?.colorThemeRegistry;
+	if (!registry) return;
+	const existing = registry.get("motty-plddt");
+	if (existing && existing.name === "motty-plddt") return;
+	const builtin = registry.get("plddt-confidence");
+	const hasBuiltin = builtin && builtin.name === "plddt-confidence";
+	const legend = hasBuiltin ? builtin.factory({}, builtin.defaultValues)?.legend : undefined;
+	function mottyPlddtFactory(ctx, props) {
+		const S = molstar.lib.structure;
+		const cache = new Map();
+		const ctxFor = (model) => {
+			let entry = cache.get(model.id);
+			if (!entry) {
+				entry = getModelPlddtContext(model);
+				cache.set(model.id, entry);
+			}
+			return entry;
+		};
+		let color = () => PLDDT_NO_SCORE;
+		if (ctx.structure) {
+			const colorAt = (unit, element) => {
+				if (!S.Unit.isAtomic(unit)) return PLDDT_NO_SCORE;
+				return plddtColorFor(plddtValueAt(unit, element, ctxFor(unit.model)));
+			};
+			color = (location) => {
+				if (S.StructureElement.Location.is(location)) {
+					return colorAt(location.unit, location.element);
+				}
+				if (S.Bond.isLocation(location)) {
+					return colorAt(location.aUnit, location.aUnit.elements[location.aIndex]);
+				}
+				return PLDDT_NO_SCORE;
+			};
+		}
+		return {
+			factory: mottyPlddtFactory,
+			granularity: "group",
+			preferSmoothing: true,
+			color,
+			props,
+			description: "Colors atoms/residues by AlphaFold pLDDT confidence (Model Archive QA metric or B-factor, with automatic 0-1 / 0-100 scaling).",
+			legend,
+		};
+	}
+	registry.add({
+		name: "motty-plddt",
+		label: "pLDDT Confidence",
+		category: (hasBuiltin && builtin.category) || "Validation",
+		factory: mottyPlddtFactory,
+		getParams: () => ({}),
+		defaultValues: {},
+		isApplicable: () => true,
+		ensureCustomProperties: hasBuiltin ? builtin.ensureCustomProperties : undefined,
+	});
+}
+
 const residueCodes = { ALA:"A", ARG:"R", ASN:"N", ASP:"D", CYS:"C", GLN:"Q", GLU:"E", GLY:"G", HIS:"H", ILE:"I", LEU:"L", LYS:"K", MET:"M", PHE:"F", PRO:"P", SER:"S", THR:"T", TRP:"W", TYR:"Y", VAL:"V", MSE:"M", SEC:"U", PYL:"O", A:"A", C:"C", G:"G", U:"U", T:"T", DA:"A", DC:"C", DG:"G", DT:"T" };
 function structureInfo() {
-  const chains = new Map(), seen = new Set();
+  const chains = new Map(), seen = new Map();
+  const modelCtxCache = new Map();
+  const getCtx = (m) => {
+    let c = modelCtxCache.get(m.id);
+    if (!c) { c = getModelPlddtContext(m); modelCtxCache.set(m.id, c); }
+    return c;
+  };
   let polymer_residues = 0, water_residues = 0, ligand_residues = 0;
+  let plddtSum = 0, plddtCount = 0;
   for (const unit of structure.obj.data.units) {
     if (unit.kind !== 0) continue;
     const h = unit.model.atomicHierarchy;
+    const ctx = getCtx(unit.model);
     for (const element of unit.elements) {
       const ri = h.residueAtomSegments.index[element], ci = h.chainAtomSegments.index[element];
       const key = `${unit.model.id}:${ci}:${ri}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const entity = unit.model.entities.getEntityIndex(h.chains.label_entity_id.value(ci));
-      const type = unit.model.entities.data.type.value(entity);
-      if (type === "water") { water_residues++; continue; }
-      if (type !== "polymer") { ligand_residues++; continue; }
-      const r = residueAt(unit, element), name = h.atoms.label_comp_id.value(element);
-      if (!chains.has(r.chain)) chains.set(r.chain, { id: r.chain, residues: [] });
-      chains.get(r.chain).residues.push({ id: r.residue, name, code: residueCodes[name] || "X" });
-      polymer_residues++;
+      let entry = seen.get(key);
+      if (!entry) {
+        const entity = unit.model.entities.getEntityIndex(h.chains.label_entity_id.value(ci));
+        const type = unit.model.entities.data.type.value(entity);
+        if (type === "water") { water_residues++; seen.set(key, { ignore: true }); continue; }
+        if (type !== "polymer") { ligand_residues++; seen.set(key, { ignore: true }); continue; }
+        const r = residueAt(unit, element), name = h.atoms.label_comp_id.value(element);
+        if (!chains.has(r.chain)) chains.set(r.chain, { id: r.chain, residues: [] });
+        entry = { obj: { id: r.residue, name, code: residueCodes[name] || "X", plddt: null }, sum: 0, count: 0 };
+        chains.get(r.chain).residues.push(entry.obj);
+        seen.set(key, entry);
+        polymer_residues++;
+      }
+      if (entry.ignore) continue;
+      if (ctx.available) {
+        const v = plddtValueAt(unit, element, ctx);
+        if (Number.isFinite(v) && v >= 0) {
+          entry.sum += v;
+          entry.count++;
+          plddtSum += v;
+          plddtCount++;
+        }
+      }
     }
   }
-  return { chains: [...chains.values()], polymer_residues, water_residues, ligand_residues };
+  for (const entry of seen.values()) {
+    if (!entry.ignore && entry.count > 0) {
+      entry.obj.plddt = Math.round((entry.sum / entry.count) * 10) / 10;
+    }
+  }
+  const firstModel = structure.obj.data.models[0];
+  const firstCtx = getCtx(firstModel);
+  const plddt = {
+    available: firstCtx.available,
+    source: firstCtx.source,
+    scale: firstCtx.scale,
+    mean: plddtCount > 0 ? Math.round((plddtSum / plddtCount) * 10) / 10 : Math.round(firstCtx.mean * 10) / 10,
+    min: Math.round(firstCtx.min * 10) / 10,
+    max: Math.round(firstCtx.max * 10) / 10,
+    isPredicted: currentIsPredicted,
+  };
+  return { chains: [...chains.values()], polymer_residues, water_residues, ligand_residues, plddt };
 }
 function reportStructureInfo() {
   if (structure) emit("structure-info", { assetId, assetVersion, info: structureInfo() });
@@ -294,7 +522,7 @@ function representationProps(style) {
 		: dark ? 0xe8e5ef : 0x63748b;
 	return {
 		type: ({ stick: "ball-and-stick", surface: "molecular-surface", spacefill: "spacefill", backbone: "backbone", line: "line" })[style.mode] || "cartoon",
-    color: ({ chain: "chain-id", uniform: "uniform", element: "element-symbol", sequence: "sequence-id", hydrophobicity: "hydrophobicity", plddt: "plddt-confidence", bfactor: "uncertainty" })[style.palette] || "secondary-structure",
+    color: ({ chain: "chain-id", uniform: "uniform", element: "element-symbol", sequence: "sequence-id", hydrophobicity: "hydrophobicity", plddt: "motty-plddt", bfactor: "uncertainty" })[style.palette] || "secondary-structure",
 		colorParams:
 			style.palette === "uniform"
 				? { value: customColor }
@@ -378,6 +606,37 @@ async function applyStyle() {
 					layer.signature = signature;
 					changed = true;
 				}
+			}
+			const nonPolyColor = baseStyle.palette === "plddt" ? "motty-plddt" : "element-symbol";
+			if (!isSmallMolecule && ligandComponent && ligandColorSig !== nonPolyColor) {
+				ligandRep =
+					plugin.builders.structure.representation.buildRepresentation(
+						update,
+						ligandComponent,
+						{
+							type: "ball-and-stick",
+							color: nonPolyColor,
+							typeParams: { sizeFactor: 0.22 },
+						},
+						{ tag: "ligand-style" },
+					);
+				ligandColorSig = nonPolyColor;
+				changed = true;
+			}
+			if (!isSmallMolecule && ionComponent && ionColorSig !== nonPolyColor) {
+				ionRep =
+					plugin.builders.structure.representation.buildRepresentation(
+						update,
+						ionComponent,
+						{
+							type: "ball-and-stick",
+							color: nonPolyColor,
+							typeParams: { sizeFactor: 0.35 },
+						},
+						{ tag: "ion-style" },
+					);
+				ionColorSig = nonPolyColor;
+				changed = true;
 			}
 			if (changed) await update.commit();
 		},
@@ -475,7 +734,13 @@ function zoomCamera(factor) {
 function cameraSettled() {
 	// Mol* applies requested focus/reset on its next render tick. A receipt
 	// must describe that camera, not the snapshot from before the click.
-	return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+	// Guard with a short timer so occluded/background WebViews never stall on suspended rAF.
+	return new Promise(resolve => {
+		let done = false;
+		const finish = () => { if (!done) { done = true; resolve(); } };
+		const timer = setTimeout(finish, 120);
+		requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); finish(); }));
+	});
 }
 function sceneSphere() {
 	const sphere = structure?.obj?.data?.boundary?.sphere;
@@ -510,7 +775,7 @@ function validateSceneOperation(operation) {
 		&& (typeof operation.layer_id !== "string" || !operation.layer_id)) throw Error("Layer ID is required");
 	if (operation.op === "representation.upsert") {
 		if (!validSceneSelection(operation.selection) || !["cartoon", "stick", "surface", "spacefill", "backbone", "line"].includes(operation.mode)
-			|| !["secondary", "chain", "uniform", "element", "sequence", "hydrophobicity"].includes(operation.palette)
+			|| !["secondary", "chain", "uniform", "element", "sequence", "hydrophobicity", "plddt", "bfactor"].includes(operation.palette)
 			|| !Number.isFinite(operation.opacity) || operation.opacity < 0 || operation.opacity > 1
 			|| (operation.color !== undefined && !/^#[0-9a-f]{6}$/i.test(operation.color))) throw Error("Invalid representation operation");
 	}
@@ -728,7 +993,14 @@ async function executeCore(message) {
   if (message.type === "asset-visibility") {
     rememberAsset(); const item = loadedAssets.get(message.assetId);
     if (!item || typeof message.visible !== "boolean") throw Error("Unknown structure visibility target");
-    const reps = [...item.styledRepresentations, ...item.maps[6].map(([,layer]) => layer.rep), ...item.maps[7].map(([,measurement]) => measurement.representation), ...(item.water ? [item.water] : [])];
+    const reps = [
+      ...item.styledRepresentations,
+      ...item.maps[6].map(([,layer]) => layer.rep),
+      ...item.maps[7].map(([,measurement]) => measurement.representation),
+      ...(item.water ? [item.water] : []),
+      ...(item.ligandRep ? [item.ligandRep] : []),
+      ...(item.ionRep ? [item.ionRep] : []),
+    ];
     for (const rep of reps) plugin.state.data.updateCellState(rep.ref, { isHidden: !message.visible || (rep === item.water && !item.waterVisible) });
     return;
   }
@@ -761,7 +1033,7 @@ async function executeCore(message) {
 		dark = message.dark === true;
 		if (!viewer) {
 			viewer = await molstar.Viewer.create("stage", {
-				extensions: [],
+				extensions: ["ma-quality-assessment"],
 				layoutIsExpanded: false,
 				layoutShowControls: false,
 				layoutShowSequence: false,
@@ -784,6 +1056,7 @@ async function executeCore(message) {
 				allowMajorPerformanceCaveat: true,
 			});
 			plugin = viewer.plugin;
+			registerPlddtTheme(plugin);
 			observeViewportResize();
 			plugin.canvas3d.setProps({
 				camera: { manualReset: true },
@@ -826,6 +1099,13 @@ async function executeCore(message) {
 		water = null;
 		waterComponent = null;
 		ligandComponent = null;
+		ligandRep = null;
+		ionComponent = null;
+		ionRep = null;
+		ligandColorSig = "";
+		ionColorSig = "";
+		isSmallMolecule = false;
+		currentIsPredicted = false;
 		localStyles.clear();
 		layers.clear();
 		residueIndex.clear();
@@ -865,17 +1145,31 @@ async function executeCore(message) {
 			structure.obj.data.elementCount > 500000
 		)
 			throw Error("No valid supported coordinates");
+		await attachQualityAssessment(structure.obj.data);
 		indexResidues();
 		polymer = await plugin.builders.structure.tryCreateComponentStatic(
 			structure,
 			"polymer",
 		);
-		const isSmallMolecule = !polymer;
+		isSmallMolecule = !polymer;
 		if (!polymer) {
-      polymer = await plugin.builders.structure.tryCreateComponentStatic(structure, "all");
-      mode = "stick"; palette = "element"; baseStyle = { mode, palette };
-    }
-    if (!polymer) throw Error("No valid coordinates");
+			polymer = await plugin.builders.structure.tryCreateComponentStatic(structure, "all");
+			mode = "stick"; palette = "element"; baseStyle = { mode, palette };
+		} else {
+			currentIsPredicted = isPredictedPlddtStructure(structure.obj.data, message.assetId, message.content);
+			if (!message.append && !kept && !message.color && currentIsPredicted) {
+				palette = "plddt";
+				baseStyle = { mode, palette };
+			}
+		}
+		if (!polymer) throw Error("No valid coordinates");
+		ligandComponent = await plugin.builders.structure.tryCreateComponentStatic(
+			structure,
+			"ligand",
+		);
+		ionComponent = !isSmallMolecule
+			? await plugin.builders.structure.tryCreateComponentStatic(structure, "ion")
+			: null;
 		await applyStyle();
 		waterComponent = await plugin.builders.structure.tryCreateComponentStatic(
 			structure,
@@ -891,33 +1185,6 @@ async function executeCore(message) {
 					typeParams: { sizeFactor: 0.12 },
 				},
 			);
-		ligandComponent = await plugin.builders.structure.tryCreateComponentStatic(
-			structure,
-			"ligand",
-		);
-		if (!isSmallMolecule && ligandComponent) {
-			await plugin.builders.structure.representation.addRepresentation(
-				ligandComponent,
-				{
-					type: "ball-and-stick",
-					color: "element-symbol",
-					typeParams: { sizeFactor: 0.22 },
-				},
-			);
-		}
-		if (!isSmallMolecule) {
-			const ionComponent = await plugin.builders.structure.tryCreateComponentStatic(structure, "ion");
-			if (ionComponent) {
-				await plugin.builders.structure.representation.addRepresentation(
-					ionComponent,
-					{
-						type: "ball-and-stick",
-						color: "element-symbol",
-						typeParams: { sizeFactor: 0.35 },
-					},
-				);
-			}
-		}
 		if (kept && sameFrame(kept.sphere, sceneSphere())) plugin.canvas3d.camera.setState(kept.camera, 0);
 		else plugin.managers.camera.reset(undefined, 0);
 		assetId = typeof message.assetId === "string" ? message.assetId : "local";
@@ -1052,18 +1319,6 @@ async function executeCore(message) {
 		plugin.state.data.updateCellState(water.ref, {
 			isHidden: !message.visible,
 		});
-	} else if (
-		message.type === "asset-visibility" &&
-		typeof message.assetId === "string" &&
-		typeof message.visible === "boolean"
-	) {
-		const targetAsset = message.assetId === assetId ? { styledRepresentations, water } : loadedAssets.get(message.assetId);
-		if (targetAsset) {
-			for (const rep of targetAsset.styledRepresentations || [])
-				plugin.state.data.updateCellState(rep.ref, { isHidden: !message.visible });
-			if (targetAsset.water)
-				plugin.state.data.updateCellState(targetAsset.water.ref, { isHidden: !message.visible || !waterVisible });
-		}
 	} else if (message.type === "presentation" && validPresentation(message.presentation)) {
 		presentation = { ...message.presentation };
 		applyPresentation();
@@ -1144,7 +1399,7 @@ async function executeView(message) {
 	try {
 		if (typeof message.id !== "string" || !message.id || message.id.length > 256 || typeof message.chain !== "string" || message.chain.length > 8
 			|| (message.residue !== null && (typeof message.residue !== "string" || !/^-?\d+[A-Za-z]?$/.test(message.residue)))
-			|| !["cartoon", "stick", "surface", "spacefill", "backbone", "line"].includes(message.mode) || !["secondary", "chain", "uniform", "element", "sequence", "hydrophobicity"].includes(message.palette) || typeof message.focus !== "boolean") throw Error("Invalid view operation");
+			|| !["cartoon", "stick", "surface", "spacefill", "backbone", "line"].includes(message.mode) || !["secondary", "chain", "uniform", "element", "sequence", "hydrophobicity", "plddt", "bfactor"].includes(message.palette) || typeof message.focus !== "boolean") throw Error("Invalid view operation");
 		if (!structure || !plugin) throw Error("Viewer is not ready");
 		if (message.assetId !== assetId || message.assetVersion !== assetVersion) throw Error("Asset or version does not match the loaded structure");
 		const loci = message.residue === null ? null : lociFor(message);

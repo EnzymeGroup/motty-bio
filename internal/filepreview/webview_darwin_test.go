@@ -63,7 +63,236 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareOverlay: %v", err)
 	}
+	af3CIF := []byte(`data_elof
+#
+_entry.id elof
+#
+loop_
+_entity.id
+_entity.type
+1 polymer
+2 non-polymer
+#
+loop_
+_entity_poly.entity_id
+_entity_poly.type
+1 polypeptide(L)
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM   1  N N   . ALA A 1 1 ? 0.000  0.000 0.000 1.00 96.50 1 A 1
+ATOM   2  C CA  . ALA A 1 1 ? 1.458  0.000 0.000 1.00 96.50 1 A 1
+ATOM   3  C C   . ALA A 1 1 ? 2.009  1.420 0.000 1.00 96.50 1 A 1
+ATOM   4  O O   . ALA A 1 1 ? 1.251  2.390 0.000 1.00 96.50 1 A 1
+ATOM   5  N N   . GLY A 1 2 ? 3.330  1.530 0.000 1.00 81.20 2 A 1
+ATOM   6  C CA  . GLY A 1 2 ? 4.000  2.820 0.000 1.00 81.20 2 A 1
+ATOM   7  C C   . GLY A 1 2 ? 5.510  2.660 0.000 1.00 81.20 2 A 1
+ATOM   8  O O   . GLY A 1 2 ? 6.040  1.550 0.000 1.00 81.20 2 A 1
+ATOM   9  N N   . SER A 1 3 ? 6.190  3.800 0.000 1.00 61.40 3 A 1
+ATOM   10 C CA  . SER A 1 3 ? 7.640  3.850 0.000 1.00 61.40 3 A 1
+ATOM   11 C C   . SER A 1 3 ? 8.180  5.270 0.000 1.00 61.40 3 A 1
+ATOM   12 O O   . SER A 1 3 ? 7.420  6.240 0.000 1.00 61.40 3 A 1
+ATOM   13 N N   . VAL A 1 4 ? 9.500  5.380 0.000 1.00 34.80 4 A 1
+ATOM   14 C CA  . VAL A 1 4 ? 10.170 6.670 0.000 1.00 34.80 4 A 1
+ATOM   15 C C   . VAL A 1 4 ? 11.680 6.510 0.000 1.00 34.80 4 A 1
+ATOM   16 O O   . VAL A 1 4 ? 12.210 5.400 0.000 1.00 34.80 4 A 1
+HETATM 17 C C1  . LIG B 2 . ? 15.000 2.000 0.000 1.00 88.00 1 B 1
+HETATM 18 O O1  . LIG B 2 . ? 16.250 2.000 0.000 1.00 42.00 1 B 1
+#
+`)
+	esmfoldPDB := []byte(
+		"ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.95           N\n" +
+			"ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.95           C\n" +
+			"ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00  0.95           C\n" +
+			"ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00  0.95           O\n" +
+			"ATOM      5  N   GLY A   2       3.330   1.530   0.000  1.00  0.78           N\n" +
+			"ATOM      6  CA  GLY A   2       4.000   2.820   0.000  1.00  0.78           C\n" +
+			"ATOM      7  C   GLY A   2       5.510   2.660   0.000  1.00  0.78           C\n" +
+			"ATOM      8  O   GLY A   2       6.040   1.550   0.000  1.00  0.78           O\n" +
+			"ATOM      9  N   SER A   3       6.190   3.800   0.000  1.00  0.58           N\n" +
+			"ATOM     10  CA  SER A   3       7.640   3.850   0.000  1.00  0.58           C\n" +
+			"ATOM     11  C   SER A   3       8.180   5.270   0.000  1.00  0.58           C\n" +
+			"ATOM     12  O   SER A   3       7.420   6.240   0.000  1.00  0.58           O\n" +
+			"ATOM     13  N   VAL A   4       9.500   5.380   0.000  1.00  0.32           N\n" +
+			"ATOM     14  CA  VAL A   4      10.170   6.670   0.000  1.00  0.32           C\n" +
+			"ATOM     15  C   VAL A   4      11.680   6.510   0.000  1.00  0.32           C\n" +
+			"ATOM     16  O   VAL A   4      12.210   5.400   0.000  1.00  0.32           O\n" +
+			"END\n")
+	maQACIF := []byte(`data_AF_P00001
+#
+_entry.id AF_P00001
+#
+loop_
+_entity.id
+_entity.type
+1 polymer
+#
+loop_
+_entity_poly.entity_id
+_entity_poly.type
+1 polypeptide(L)
+#
+loop_
+_ma_qa_metric.id
+_ma_qa_metric.name
+_ma_qa_metric.type
+_ma_qa_metric.mode
+_ma_qa_metric.software_group_id
+1 pLDDT pLDDT local 1
+#
+loop_
+_ma_qa_metric_local.ordinal_id
+_ma_qa_metric_local.model_id
+_ma_qa_metric_local.label_asym_id
+_ma_qa_metric_local.label_seq_id
+_ma_qa_metric_local.label_comp_id
+_ma_qa_metric_local.metric_id
+_ma_qa_metric_local.metric_value
+1 1 A 1 ALA 1 95.0
+2 1 A 2 GLY 1 75.0
+3 1 A 3 SER 1 55.0
+4 1 A 4 VAL 1 40.0
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1  N N  . ALA A 1 1 ? 0.000  0.000 0.000 1.00 0.00 1 A 1
+ATOM 2  C CA . ALA A 1 1 ? 1.458  0.000 0.000 1.00 0.00 1 A 1
+ATOM 3  C C  . ALA A 1 1 ? 2.009  1.420 0.000 1.00 0.00 1 A 1
+ATOM 4  O O  . ALA A 1 1 ? 1.251  2.390 0.000 1.00 0.00 1 A 1
+ATOM 5  N N  . GLY A 1 2 ? 3.330  1.530 0.000 1.00 0.00 2 A 1
+ATOM 6  C CA . GLY A 1 2 ? 4.000  2.820 0.000 1.00 0.00 2 A 1
+ATOM 7  C C  . GLY A 1 2 ? 5.510  2.660 0.000 1.00 0.00 2 A 1
+ATOM 8  O O  . GLY A 1 2 ? 6.040  1.550 0.000 1.00 0.00 2 A 1
+ATOM 9  N N  . SER A 1 3 ? 6.190  3.800 0.000 1.00 0.00 3 A 1
+ATOM 10 C CA . SER A 1 3 ? 7.640  3.850 0.000 1.00 0.00 3 A 1
+ATOM 11 C C  . SER A 1 3 ? 8.180  5.270 0.000 1.00 0.00 3 A 1
+ATOM 12 O O  . SER A 1 3 ? 7.420  6.240 0.000 1.00 0.00 3 A 1
+ATOM 13 N N  . VAL A 1 4 ? 9.500  5.380 0.000 1.00 0.00 4 A 1
+ATOM 14 C CA . VAL A 1 4 ? 10.170 6.670 0.000 1.00 0.00 4 A 1
+ATOM 15 C C  . VAL A 1 4 ? 11.680 6.510 0.000 1.00 0.00 4 A 1
+ATOM 16 O O  . VAL A 1 4 ? 12.210 5.400 0.000 1.00 0.00 4 A 1
+#
+`)
+	plddtBandProbeJS := `setTimeout(() => {
+		try {
+			const w = document.getElementById('viewer').contentWindow;
+			const state = w.eval('({ plugin, representation, residueIndex, ligandRep, ligandComponent, molstar, palette: baseStyle.palette })');
+			const cellObj = (sel) => sel ? state.plugin.state.data.cells.get(sel.ref)?.obj : null;
+			const reg = state.plugin.representation.structure.themes.colorThemeRegistry;
+			const hasBuiltin = reg.get('plddt-confidence').name === 'plddt-confidence';
+			const hasMotty = reg.get('motty-plddt').name === 'motty-plddt';
+			const cell = state.representation?.cell || (state.representation ? state.plugin.state.data.cells.get(state.representation.ref) : null);
+			const theme = cell?.obj?.data?.repr?.theme?.color;
+			if (!theme) {
+				const diag = w.eval("(() => {" +
+					"const layer = layers.get('Whole structure');" +
+					"const repCell = representation ? plugin.state.data.cells.get(representation.ref) : null;" +
+					"const compCell = layer?.component ? plugin.state.data.cells.get(layer.component.ref) : null;" +
+					"const ligCell = ligandRep ? plugin.state.data.cells.get(ligandRep.ref) : null;" +
+					"return JSON.stringify({" +
+					"cellsSize: plugin.state.data.cells.size," +
+					"transformsSize: plugin.state.data.tree.transforms.size," +
+					"compRef: layer?.component?.ref," +
+					"compStatus: compCell?.status," +
+					"repRef: representation?.ref," +
+					"repStatus: repCell?.status," +
+					"repErr: repCell?.errorText," +
+					"repHasObj: !!repCell?.obj," +
+					"repDataKeys: repCell?.obj?.data ? Object.keys(repCell.obj.data) : []," +
+					"reprKeys: repCell?.obj?.data?.repr ? Object.keys(repCell.obj.data.repr) : []," +
+					"ligRef: ligandRep?.ref," +
+					"ligStatus: ligCell?.status," +
+					"ligErr: ligCell?.errorText," +
+					"logs: plugin.log.entries.toArray().map(e => e.type + ':' + e.message)" +
+					"});" +
+					"})()");
+				window.viva.postMessage(JSON.stringify({ type: 'probe', ok: false, detail: diag }));
+				return;
+			}
+			const S = state.molstar.lib.structure;
+			const hex = (c) => '#' + Number(c).toString(16).padStart(6, '0');
+			const colors = ['A:1', 'A:2', 'A:3', 'A:4'].map(k => {
+				const loci = state.residueIndex.get(k);
+				const loc = loci ? S.StructureElement.Loci.getFirstLocation(loci) : null;
+				return loc ? hex(theme.color(loc)) : 'missing';
+			});
+			let ligColors = [];
+			const ligTheme = cellObj(state.ligandRep)?.data?.repr?.theme?.color;
+			if (ligTheme && state.ligandComponent?.obj?.data) {
+				const lStruct = state.ligandComponent.obj.data;
+				for (const u of lStruct.units) {
+					for (const el of u.elements) {
+						ligColors.push(hex(ligTheme.color(S.StructureElement.Location.create(lStruct, u, el))));
+					}
+				}
+			}
+			const legendVis = document.getElementById('plddt-legend')?.classList.contains('visible');
+			const meanTxt = document.getElementById('plddt-mean')?.textContent || '';
+			const want = ['#0053d6', '#65cbf3', '#ffdb13', '#ff7d45'];
+			const polyOK = colors.join(',') === want.join(',');
+			const ligOK = ligColors.length === 0 || ligColors.join(',') === '#65cbf3,#ff7d45';
+			const ok = state.palette === 'plddt' && hasBuiltin && hasMotty && polyOK && ligOK && legendVis && meanTxt.includes('Mean');
+			window.viva.postMessage(JSON.stringify({ type: 'probe', ok, detail: 'palette=' + state.palette + ' builtin=' + hasBuiltin + ' colors=' + colors.join(',') + ' lig=' + ligColors.join(',') + ' mean=' + meanTxt }));
+		} catch (e) {
+			window.viva.postMessage(JSON.stringify({ type: 'probe', ok: false, detail: 'err=' + String(e) }));
+		}
+	}, 250);`
 	cases := []probeCase{
+		{
+			name:      "AF3-mmCIF-pLDDT",
+			fileName:  "elof_model.cif",
+			data:      af3CIF,
+			waitReady: true,
+			probeJS:   plddtBandProbeJS,
+		},
+		{
+			name:      "ESMFold-01-pLDDT",
+			fileName:  "esmfold_pred.pdb",
+			data:      esmfoldPDB,
+			waitReady: true,
+			probeJS:   plddtBandProbeJS,
+		},
+		{
+			name:      "MA-QA-mmCIF-pLDDT",
+			fileName:  "AF-P00001-F1-model_v4.cif",
+			data:      maQACIF,
+			waitReady: true,
+			probeJS:   plddtBandProbeJS,
+		},
 		{
 			name:      "PDB-MolStar",
 			fileName:  "1UBQ.pdb",
@@ -81,6 +310,26 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 			fileName:  "1CRN.cif",
 			data:      cifBytes,
 			waitReady: true,
+			probeJS: `setTimeout(() => {
+				try {
+					const sel = document.getElementById('palette');
+					const initPalette = sel.value;
+					sel.value = 'plddt';
+					sel.dispatchEvent(new Event('change'));
+					setTimeout(() => {
+						const w = document.getElementById('viewer').contentWindow;
+						const state = w.eval('({ palette: baseStyle.palette, theme: plugin.state.data.cells.get(representation?.ref)?.obj?.data?.repr?.theme?.color })');
+						const S = w.molstar.lib.structure;
+						const loci = w.eval('residueIndex.values().next().value');
+						const loc = loci ? S.StructureElement.Loci.getFirstLocation(loci) : null;
+						const col = loc && state.theme ? '#' + Number(state.theme.color(loc)).toString(16).padStart(6, '0') : 'none';
+						const ok = initPalette === 'secondary' && state.palette === 'plddt' && ['#0053d6','#65cbf3','#ffdb13','#ff7d45'].includes(col);
+						window.viva.postMessage(JSON.stringify({ type: 'probe', ok, detail: 'init=' + initPalette + ' switched=' + state.palette + ' sample=' + col }));
+					}, 350);
+				} catch (e) {
+					window.viva.postMessage(JSON.stringify({ type: 'probe', ok: false, detail: 'err=' + String(e) }));
+				}
+			}, 200);`,
 		},
 		{
 			name:      "SDF-MolStar",
@@ -311,11 +560,15 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 							finish(fmt.Sprintf("%s: expected >=%d overlays, got %d", tc.name, tc.wantMinOverlays, msg.OverlayCount))
 							return
 						}
+						if tc.probeJS != "" {
+							page.Eval(tc.probeJS)
+							return
+						}
 						results = append(results, fmt.Sprintf("%s: OK (atoms=%d mode=%s palette=%s overlays=%d)", tc.name, msg.Atoms, msg.Mode, msg.Palette, msg.OverlayCount))
 						idx++
 						startNext()
+						return
 					}
-					return
 				}
 				if msg.Type == "probe" {
 					if !msg.OK {

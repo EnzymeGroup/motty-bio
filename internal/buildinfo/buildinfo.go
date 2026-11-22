@@ -18,7 +18,7 @@ const DockBadge = dockBadge
 
 // VariantSuffix marks this local derivative build based on the upstream version
 // (e.g. 0.4.24 -> 0.4.24-bio.1) without colliding with the next upstream patch.
-const VariantSuffix = "-bio.2"
+const VariantSuffix = "-bio.3"
 
 // DisplayVersion returns base with VariantSuffix appended.
 func DisplayVersion(base string) string {
