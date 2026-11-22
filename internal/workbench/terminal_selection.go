@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/keymap"
 	"motty/internal/term"
 )
 
@@ -402,6 +403,8 @@ func (state *State) terminalPointer(session *Session, event gfx.PointerEvent) gf
 				target, open, linkChanged := terminal.links.release(terminal.screen, linkPosition)
 				if open && terminal.openLink != nil {
 					terminal.openLink(target)
+				} else if !open && event.Modifiers == keymap.Primary {
+					open = state.tryOpenTerminalFilePreview(session, position)
 				}
 				return gfx.EventResult{Handled: event.Captured || open, Repaint: linkChanged}
 			}
@@ -422,6 +425,9 @@ func (state *State) terminalPointer(session *Session, event gfx.PointerEvent) gf
 				var linkChanged bool
 				target, open, linkChanged = terminal.links.release(terminal.screen, linkPosition)
 				changed = changed || linkChanged
+				if !open && event.Modifiers == keymap.Primary && state.tryOpenTerminalFilePreview(session, position) {
+					return gfx.EventResult{Handled: true, Repaint: true}
+				}
 			}
 			// A link the click opens is not also a cursor move.
 			if !open && !state.terminalInputClickOff && terminalInputClick(event) && state.moveInputCursor(session, position) {

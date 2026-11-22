@@ -124,6 +124,19 @@ func (state *State) actionAvailable(session *Session, item detected) bool {
 		return session.isLocal() && session.wslDistro() == ""
 	case actionExtract:
 		return session.term.shell != nil && session.host.System != sshconn.SystemWindows && !(session.isLocal() && runtime.GOOS == "windows")
+	case actionPreview:
+		if state.options.OpenContentWindow == nil {
+			return false
+		}
+		if session.isLocal() && session.wslDistro() == "" {
+			target, ok := state.localRevealTarget(session, item.target)
+			if !ok {
+				return false
+			}
+			info, err := os.Stat(target)
+			return err == nil && !info.IsDir()
+		}
+		return session.conn != nil && session.hasServer() && resolveRemoteTerminalPath(session, item.target) != ""
 	}
 	return true
 }
@@ -147,6 +160,8 @@ func (state *State) actionLabel(item detected) string {
 		format = m.ActionRevealFmt
 	case actionExtract:
 		format = m.ActionExtractFmt
+	case actionPreview:
+		format = m.ActionPreviewFmt
 	}
 	label := []rune(item.label)
 	if over := len([]rune(fmt.Sprintf(format, item.label))) - maxActionLabel; over > 0 && len(label) > over+1 {
@@ -181,6 +196,8 @@ func (state *State) runAction(session *Session, item detected) {
 	case actionExtract:
 		// Typed, not run: the user reads the line and presses Enter.
 		state.typed(session, []byte(item.target))
+	case actionPreview:
+		state.openTerminalFilePreview(session, item.target)
 	}
 }
 

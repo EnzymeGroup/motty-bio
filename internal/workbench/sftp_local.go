@@ -440,6 +440,8 @@ func (state *State) clickSFTPLocal(session *Session, view *sftpView, id gfx.ID) 
 		state.openSFTPDialog(view, sftpDialogCreateDirectory)
 	case id == hitSFTPOpenEntry:
 		state.openLocalSelected(view)
+	case id == hitSFTPOverlayStructures:
+		state.openStructureOverlay(view, true)
 	case id == hitSFTPEditExternal:
 		state.openLocalExternal(view)
 	case id == hitSFTPDelete:

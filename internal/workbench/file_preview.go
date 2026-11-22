@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,12 +23,15 @@ import (
 	"github.com/vivaui/viva/gfx"
 	"motty/internal/filepreview"
 	"motty/internal/sftpclient"
+	"motty/internal/term"
 )
 
 var (
 	hitDocumentTogglePreview = tree.ID(documentHits, "toggle-preview")
 	hitDocumentOpenBrowser   = tree.ID(documentHits, "open-browser")
 	hitDocumentOpenExternal  = tree.ID(documentHits, "open-external")
+	hitSFTPOverlayStructures = tree.ID(sftpHits, "sftp-overlay-structures")
+	hitSFTPMenuOverlay       = tree.ID(sftpMenuHits, "sftp-menu-overlay")
 )
 
 var previewDocSeq atomic.Uint64
@@ -35,6 +39,7 @@ var previewDocSeq atomic.Uint64
 const (
 	maxPreviewSiblingEntries = 64
 	maxPreviewSiblingBytes   = 16 << 20
+	maxOverlayStructures     = 12
 )
 
 type filePreviewState struct {
@@ -161,8 +166,10 @@ func (d *fileDocument) previewSource() filepreview.Source {
 			}
 			return d.preview.doc
 		},
-		Theme:       d.previewThemeInfo,
-		LoadSibling: d.loadPreviewSibling,
+		Theme:        d.previewThemeInfo,
+		LoadSibling:  d.loadPreviewSibling,
+		ListSiblings: d.listPreviewSiblings,
+		MaxBytes:     d.previewLimitBytes(),
 	}
 }
 
@@ -184,11 +191,9 @@ func (d *fileDocument) previewScheme() *app.WebScheme {
 				respond(app.WebResponse{Status: http.StatusNotFound, MIME: "text/plain; charset=utf-8", Data: []byte("not found")})
 				return
 			}
-			// Sibling assets under HTML "site/" may perform local disk or SFTP I/O,
-			// so handle them off the UI thread; everything else is in-memory.
-			if strings.HasPrefix(subPath, "site/") && d.preview != nil && d.preview.doc != nil && d.preview.doc.Descriptor.Kind == filepreview.KindHTML {
+			if filepreview.NeedsAsync(subPath) {
 				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 					defer cancel()
 					resp := filepreview.Resolve(ctx, source, subPath)
 					respond(app.WebResponse{Status: resp.Status, MIME: resp.MIME, Headers: resp.Headers, Data: resp.Data})
@@ -323,7 +328,6 @@ func (d *fileDocument) togglePreviewMode() {
 		return
 	}
 	if d.preview.sourceMode {
-		// Switching back to Preview: reflect any unsaved source edits immediately.
 		if d.ready {
 			current := d.editor.String()
 			if current != string(d.preview.doc.Data) {
@@ -370,7 +374,7 @@ func (d *fileDocument) openPreviewExternalApp() {
 	if !d.hasPreview() || d.owner.options.OpenPath == nil {
 		return
 	}
-	if d.local {
+	if d.local && len(d.preview.doc.Overlays) == 0 {
 		if err := d.owner.options.OpenPath(d.location); err != nil {
 			d.notices.show(d.name, err.Error(), components.ToastError)
 		}
@@ -386,6 +390,9 @@ func (d *fileDocument) openPreviewExternalApp() {
 	}
 	localPath := filepath.Join(d.preview.tempDir, safeLocalName(d.name))
 	data := d.raw
+	if len(data) == 0 {
+		data = d.preview.doc.Data
+	}
 	if d.preview.doc.Descriptor.TextEditable && d.ready && d.dirty() {
 		data = []byte(d.editor.String())
 	}
@@ -404,6 +411,7 @@ func (d *fileDocument) handlePreviewMessage(raw string) {
 		Text string `json:"text"`
 		Name string `json:"name"`
 		Data string `json:"data"`
+		Path string `json:"path"`
 	}
 	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
 		return
@@ -413,6 +421,8 @@ func (d *fileDocument) handlePreviewMessage(raw string) {
 		if msg.Text != "" && d.owner.options.SetClipboardText != nil {
 			_ = d.owner.options.SetClipboardText(msg.Text)
 		}
+	case "open-sibling":
+		d.openSiblingDocument(msg.Path)
 	case "snapshot":
 		const prefix = "data:image/png;base64,"
 		if !strings.HasPrefix(msg.Data, prefix) {
@@ -429,6 +439,32 @@ func (d *fileDocument) handlePreviewMessage(raw string) {
 		}
 		d.notices.show(d.name, fmt.Sprintf(d.owner.messages.FileWindow.SnapshotSavedFmt, saved), components.ToastSuccess)
 	}
+}
+
+func (d *fileDocument) openSiblingDocument(target string) {
+	target = strings.TrimSpace(target)
+	if target == "" || d.owner == nil {
+		return
+	}
+	var resolved string
+	if d.local {
+		if filepath.IsAbs(target) {
+			resolved = filepath.Clean(target)
+		} else {
+			resolved = filepath.Join(filepath.Dir(d.location), filepath.FromSlash(target))
+		}
+	} else {
+		if strings.HasPrefix(target, "/") {
+			resolved = path.Clean(target)
+		} else {
+			resolved = path.Join(path.Dir(d.location), target)
+		}
+	}
+	var opener func() (sftpclient.Remote, error)
+	if d.preview != nil {
+		opener = d.preview.remoteOpener
+	}
+	d.owner.openFileLocation(d.view, d.source, resolved, d.local, opener, d.origin)
 }
 
 func savePreviewSnapshot(suggested string, pngBytes []byte) (string, error) {
@@ -456,6 +492,48 @@ func savePreviewSnapshot(suggested string, pngBytes []byte) (string, error) {
 		return "", err
 	}
 	return target, nil
+}
+
+func (d *fileDocument) listPreviewSiblings(ctx context.Context) ([]string, error) {
+	if d.preview == nil || d.location == "" {
+		return nil, nil
+	}
+	var names []string
+	if d.local {
+		entries, err := os.ReadDir(filepath.Dir(d.location))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+	} else {
+		opener := d.preview.remoteOpener
+		if opener == nil {
+			return nil, errors.New("remote unavailable")
+		}
+		remote, err := opener()
+		if err != nil {
+			return nil, err
+		}
+		defer remote.Close()
+		infos, err := remote.ReadDir(path.Dir(d.location))
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range infos {
+			if !info.IsDir() {
+				names = append(names, info.Name())
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (d *fileDocument) loadPreviewSibling(ctx context.Context, relPath string) ([]byte, error) {
@@ -492,16 +570,7 @@ func (d *fileDocument) loadPreviewSibling(ctx context.Context, relPath string) (
 		}
 		defer remote.Close()
 		remotePath := path.Join(path.Dir(d.location), relPath)
-		file, fileErr := remote.Open(remotePath)
-		if fileErr != nil {
-			return nil, fileErr
-		}
-		defer file.Close()
-		limited := io.LimitReader(file, int64(limit)+1)
-		data, err = io.ReadAll(limited)
-		if err == nil && len(data) > limit {
-			err = sftpclient.ErrPreviewFileTooLarge
-		}
+		data, err = readRemoteBytesBounded(remote, remotePath, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -518,6 +587,23 @@ func (d *fileDocument) loadPreviewSibling(ctx context.Context, relPath string) (
 		p.siblingBytes += len(data)
 	}
 	p.siblingMu.Unlock()
+	return data, nil
+}
+
+func readRemoteBytesBounded(remote sftpclient.Remote, remotePath string, limit int) ([]byte, error) {
+	file, err := remote.Open(remotePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	limited := io.LimitReader(file, int64(limit)+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, sftpclient.ErrPreviewFileTooLarge
+	}
 	return data, nil
 }
 
@@ -538,4 +624,306 @@ func (d *fileDocument) disposePreview() {
 		_ = os.RemoveAll(p.tempDir)
 	}
 	p.remoteOpener = nil
+}
+
+// openFileLocation opens an arbitrary local or remote file directly in Motty's
+// tabbed file preview window (used by clickable CSV/PAE sibling paths and
+// terminal Cmd+Click).
+func (state *State) openFileLocation(view *sftpView, sourceLabel, location string, local bool, remoteOpener func() (sftpclient.Remote, error), origin *sftpWindow) {
+	if state.options.OpenContentWindow == nil || location == "" {
+		return
+	}
+	if !local && remoteOpener == nil && view != nil {
+		remoteOpener = view.openFiles
+	}
+	if !local && remoteOpener == nil {
+		state.fileOpenNotice(origin, state.messages.FileWindow.CannotOpen, state.messages.SFTPUnavailable, components.ToastError)
+		return
+	}
+	scopeID := "direct"
+	if view != nil {
+		for i := range state.sessions {
+			if state.sessions[i].files == view {
+				scopeID = strconv.FormatUint(uint64(state.sessions[i].ID), 10)
+				if sourceLabel == "" {
+					sourceLabel = state.sessions[i].Title + " · " + state.sessions[i].Address
+				}
+				break
+			}
+		}
+		if view.detached != nil {
+			scopeID = strconv.FormatUint(uint64(view.detached.session.ID), 10)
+			if sourceLabel == "" {
+				sourceLabel = view.detached.session.Title + " · " + view.detached.session.Address
+			}
+		}
+	}
+	if local {
+		sourceLabel = state.messages.FileWindow.Local
+	}
+	key := fmt.Sprintf("%s:%t:%s", scopeID, local, location)
+	if existing := state.fileWindows.documents[key]; existing != nil {
+		state.fileWindows.activate(existing.cacheKey)
+		return
+	}
+	if len(state.fileWindows.documents) >= 8 {
+		state.fileOpenNotice(origin, state.messages.FileWindow.CannotOpen, state.messages.FileWindow.TooMany, components.ToastWarning)
+		return
+	}
+	if state.fileWindows.documents == nil {
+		state.fileWindows.documents = make(map[string]*fileDocument)
+	}
+	name := path.Base(location)
+	if local {
+		name = filepath.Base(location)
+	}
+	d := &fileDocument{
+		owner:     state,
+		cacheKey:  key,
+		location:  location,
+		name:      name,
+		source:    sourceLabel,
+		local:     local,
+		view:      view,
+		origin:    origin,
+		previewMB: state.filePreviewMB,
+		status:    state.messages.FileWindow.Loading,
+	}
+	if !local && remoteOpener != nil {
+		d.preview = &filePreviewState{
+			docID:        strconv.FormatUint(previewDocSeq.Add(1), 10),
+			remoteOpener: remoteOpener,
+		}
+	}
+	state.fileWindows.documents[key] = d
+	state.fileWindows.pending = key
+	if local {
+		go func() {
+			data, err := readLocalDocument(location, d.previewLimitBytes())
+			state.postFileEvent(decodeFileEvent(d, data, err))
+		}()
+		return
+	}
+	d.openRemoteWorker(remoteOpener)
+	if !d.worker.OpenDocument(location, d.previewLimitBytes()) {
+		delete(state.fileWindows.documents, key)
+		d.worker.Close()
+		state.fileOpenNotice(origin, state.messages.FileWindow.CannotOpen, state.messages.SFTPUnavailable, components.ToastError)
+	}
+}
+
+// selectedStructurePaths returns the paths of selected files when 2..12
+// 3D molecular structures are selected on the active side of view.
+func selectedStructurePaths(view *sftpView, local bool) []string {
+	if view == nil {
+		return nil
+	}
+	folder := &view.sftpFolder
+	if local {
+		folder = &view.lfolder
+	}
+	var paths []string
+	for i := range folder.rows {
+		row := &folder.rows[i]
+		if !row.selected {
+			continue
+		}
+		if row.entry.IsDir() || !filepreview.IsStructureName(row.entry.Name) {
+			return nil
+		}
+		if local {
+			paths = append(paths, filepath.Join(folder.path, row.entry.Name))
+		} else {
+			paths = append(paths, path.Join(folder.path, row.entry.Name))
+		}
+	}
+	if len(paths) < 2 || len(paths) > maxOverlayStructures {
+		return nil
+	}
+	return paths
+}
+
+// openStructureOverlay loads 2..12 selected 3D structures, runs Kabsch
+// superposition against the first structure, and opens them together in Mol*.
+func (state *State) openStructureOverlay(view *sftpView, local bool) {
+	if state.options.OpenContentWindow == nil || view == nil {
+		return
+	}
+	locations := selectedStructurePaths(view, local)
+	if len(locations) < 2 {
+		return
+	}
+	var session *Session
+	for i := range state.sessions {
+		if state.sessions[i].files == view {
+			session = &state.sessions[i]
+			break
+		}
+	}
+	if view.detached != nil {
+		session = &view.detached.session
+	}
+	if session == nil {
+		return
+	}
+	var opener func() (sftpclient.Remote, error)
+	if !local {
+		opener = view.openFiles
+		if opener == nil {
+			state.fileOpenNotice(view.detached, state.messages.FileWindow.CannotOpen, state.messages.SFTPUnavailable, components.ToastError)
+			return
+		}
+	}
+	key := fmt.Sprintf("overlay:%d:%t:%s", session.ID, local, strings.Join(locations, "|"))
+	if existing := state.fileWindows.documents[key]; existing != nil {
+		state.fileWindows.activate(existing.cacheKey)
+		return
+	}
+	if len(state.fileWindows.documents) >= 8 {
+		state.fileOpenNotice(view.detached, state.messages.FileWindow.CannotOpen, state.messages.FileWindow.TooMany, components.ToastWarning)
+		return
+	}
+	if state.fileWindows.documents == nil {
+		state.fileWindows.documents = make(map[string]*fileDocument)
+	}
+	firstBase := path.Base(locations[0])
+	source := session.Title + " · " + session.Address
+	if local {
+		firstBase = filepath.Base(locations[0])
+		source = state.messages.FileWindow.Local
+	}
+	tabName := fmt.Sprintf("%s (+%d)", firstBase, len(locations)-1)
+	d := &fileDocument{
+		owner:     state,
+		cacheKey:  key,
+		location:  locations[0],
+		name:      tabName,
+		source:    source,
+		local:     local,
+		view:      view,
+		origin:    view.detached,
+		previewMB: state.filePreviewMB,
+		status:    state.messages.FileWindow.Loading,
+	}
+	state.fileWindows.documents[key] = d
+	state.fileWindows.pending = key
+
+	limit := d.previewLimitBytes()
+	go func() {
+		inputs := make([]filepreview.OverlayInput, 0, len(locations))
+		if local {
+			for _, loc := range locations {
+				data, err := readLocalDocument(loc, limit)
+				if err != nil {
+					state.postFileEvent(fileDocumentEvent{document: d, err: err})
+					return
+				}
+				inputs = append(inputs, filepreview.OverlayInput{Name: filepath.Base(loc), Data: data})
+			}
+		} else {
+			remote, err := opener()
+			if err != nil {
+				state.postFileEvent(fileDocumentEvent{document: d, err: err})
+				return
+			}
+			defer remote.Close()
+			for _, loc := range locations {
+				data, err := readRemoteBytesBounded(remote, loc, limit)
+				if err != nil {
+					state.postFileEvent(fileDocumentEvent{document: d, err: err})
+					return
+				}
+				inputs = append(inputs, filepreview.OverlayInput{Name: path.Base(loc), Data: data})
+			}
+		}
+		doc, err := filepreview.PrepareOverlay(inputs, true, limit)
+		if err != nil {
+			state.postFileEvent(fileDocumentEvent{document: d, err: err})
+			return
+		}
+		state.postFileEvent(fileDocumentEvent{
+			document: d,
+			data:     doc.Data,
+			preview:  doc,
+		})
+	}()
+}
+
+// tryOpenTerminalFilePreview checks whether the terminal cell under a Cmd+Click
+// holds a previewable file path (PDB/CIF/SDF/FASTA/A3M/CSV/PAE/SMILES/SVG/HTML/PDF/image)
+// and opens it directly in Motty's preview window.
+func (state *State) tryOpenTerminalFilePreview(session *Session, position term.Position) bool {
+	if session == nil || session.term == nil {
+		return false
+	}
+	token := session.term.screen.TokenAt(position)
+	if token == "" || strings.Contains(token, "://") {
+		return false
+	}
+	filename := pathLine.ReplaceAllString(token, "")
+	if !filepreview.IsPreviewableName(filename) {
+		return false
+	}
+	return state.openTerminalFilePreview(session, filename)
+}
+
+// openTerminalFilePreview resolves a terminal file token against the session's
+// local or remote working directory and opens it in Motty's file preview window.
+func (state *State) openTerminalFilePreview(session *Session, rawPath string) bool {
+	if session == nil || state.options.OpenContentWindow == nil {
+		return false
+	}
+	filename := strings.TrimSpace(pathLine.ReplaceAllString(rawPath, ""))
+	if filename == "" {
+		return false
+	}
+	if session.isLocal() && session.wslDistro() == "" {
+		target, ok := state.localRevealTarget(session, filename)
+		if !ok {
+			return false
+		}
+		info, err := os.Stat(target)
+		if err != nil || info.IsDir() {
+			return false
+		}
+		state.openFileLocation(session.files, state.messages.FileWindow.Local, target, true, nil, nil)
+		return true
+	}
+	if session.conn == nil || !session.hasServer() {
+		return false
+	}
+	var opener func() (sftpclient.Remote, error)
+	if session.files != nil && session.files.openFiles != nil {
+		opener = session.files.openFiles
+	} else {
+		conn := session.conn
+		opener = func() (sftpclient.Remote, error) { return openRemoteFiles(conn, transferAuto) }
+	}
+	resolved := resolveRemoteTerminalPath(session, filename)
+	if resolved == "" {
+		return false
+	}
+	source := session.Title + " · " + session.Address
+	if strings.HasPrefix(resolved, "~/") {
+		// SFTP opens relative paths directly against the remote user's home directory.
+		resolved = strings.TrimPrefix(resolved, "~/")
+	}
+	state.openFileLocation(session.files, source, resolved, false, opener, nil)
+	return true
+}
+
+func resolveRemoteTerminalPath(session *Session, filename string) string {
+	if strings.HasPrefix(filename, "/") || strings.HasPrefix(filename, "~/") {
+		return path.Clean(filename)
+	}
+	dir := ""
+	if session.term != nil && session.term.reportedDirectory.Path != "" {
+		dir = session.term.reportedDirectory.Path
+	} else if session.files != nil && session.files.path != "" {
+		dir = session.files.path
+	}
+	if dir == "" {
+		return ""
+	}
+	return path.Clean(path.Join(dir, filename))
 }

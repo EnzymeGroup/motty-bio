@@ -37,6 +37,8 @@ func sftpMenuAction(id gfx.ID) (gfx.ID, bool) {
 	switch id {
 	case hitSFTPMenuOpen:
 		return hitSFTPOpenEntry, true
+	case hitSFTPMenuOverlay:
+		return hitSFTPOverlayStructures, true
 	case hitSFTPMenuDownload:
 		return hitSFTPDownload, true
 	case hitSFTPMenuDownloadHere:
@@ -171,6 +173,9 @@ func (state *State) sftpMenuRows(session *Session, view *sftpView) menuRows {
 		if local && selected.Mode.IsRegular() {
 			rows.add(components.ContextMenuItem{ID: hitSFTPMenuEdit, Label: messages.Tools.ExtEditButton, Icon: icon(iconExternal), Disabled: busy})
 		}
+		rows.separate()
+	} else if len(selectedStructurePaths(view, local)) >= 2 {
+		rows.add(components.ContextMenuItem{ID: hitSFTPMenuOverlay, Label: messages.Tools.SFTPOverlayStructures, Icon: icon(iconColumns2), Disabled: busy})
 		rows.separate()
 	}
 	if count > 0 {

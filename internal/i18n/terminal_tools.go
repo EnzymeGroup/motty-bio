@@ -704,6 +704,7 @@ type ToolsMessages struct {
 	ActionSSHFmt                    string
 	ActionBrowserFmt                string
 	ActionFilesFmt                  string
+	ActionPreviewFmt                string
 	ActionRevealFmt                 string
 	ActionReveal                    string
 	ActionRevealFailed              string
@@ -1026,6 +1027,7 @@ type ToolsMessages struct {
 	RemoteLogsFmt                   string
 	RemoteClose                     string
 	ExtEditButton                   string
+	SFTPOverlayStructures           string
 	ExtEditOpenedFmt                string
 	ExtEditSentFmt                  string
 	ExtEditUnsentFmt                string

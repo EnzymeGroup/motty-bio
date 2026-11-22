@@ -10,10 +10,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/vivaui/viva/app"
 	"github.com/vivaui/viva/gfx"
 	"motty/internal/filepreview"
 	"motty/internal/sftpclient"
+	"motty/internal/term"
 )
 
 func TestRichPreviewFormatsDecodeAndToggleModes(t *testing.T) {
@@ -209,5 +212,234 @@ func TestRemoteHTMLSiblingAssetLoading(t *testing.T) {
 	got2, err := d.loadPreviewSibling(context.Background(), "assets/plot.js")
 	if err != nil || string(got2) != "console.log('ok')" {
 		t.Fatalf("cached remote sibling fetch failed: %q %v", string(got2), err)
+	}
+}
+
+func TestStructureOverlayFromSFTPSelection(t *testing.T) {
+	dir := t.TempDir()
+	pdb1 := []byte(
+		"ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 92.00           C\n" +
+			"ATOM      2  CA  ALA A   2       2.300   1.500   1.500  1.00 92.00           C\n" +
+			"ATOM      3  CA  ALA A   3       0.500   3.800   3.000  1.00 92.00           C\n" +
+			"ATOM      4  CA  ALA A   4      -1.800   2.200   4.500  1.00 92.00           C\n",
+	)
+	// Shifted by (+10, -5, +4) -> Kabsch should recover ~0.00 RMSD.
+	pdb2 := []byte(
+		"ATOM      1  CA  ALA A   1      10.000  -5.000   4.000  1.00 91.00           C\n" +
+			"ATOM      2  CA  ALA A   2      12.300  -3.500   5.500  1.00 91.00           C\n" +
+			"ATOM      3  CA  ALA A   3      10.500  -1.200   7.000  1.00 91.00           C\n" +
+			"ATOM      4  CA  ALA A   4       8.200  -2.800   8.500  1.00 91.00           C\n",
+	)
+	if err := os.WriteFile(filepath.Join(dir, "ref.pdb"), pdb1, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "mob.pdb"), pdb2, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host := &documentTestHost{}
+	app.UseApplicationRunner(func(start func(app.Host) error) error { return start(host) })
+	t.Cleanup(func() { host.Quit(); app.UseApplicationRunner(nil) })
+
+	if err := app.RunApplication(func(application *app.Application) error {
+		state, session, _, _ := openTestSFTP(t)
+		state.options.OpenContentWindow = application.OpenContentWindow
+		view := session.files
+		view.lfolder.path = dir
+		view.lfolder.rows = []sftpRow{
+			{entry: sftpclient.Entry{Name: "ref.pdb"}, selected: true},
+			{entry: sftpclient.Entry{Name: "mob.pdb"}, selected: true},
+			{entry: sftpclient.Entry{Name: "notes.txt"}, selected: false},
+		}
+		if paths := selectedStructurePaths(view, true); len(paths) != 2 {
+			t.Fatalf("expected 2 selected structure paths, got %v", paths)
+		}
+		// Selecting a non-structure file disables overlay.
+		view.lfolder.rows[2].selected = true
+		if paths := selectedStructurePaths(view, true); paths != nil {
+			t.Fatalf("expected nil when non-structure selected, got %v", paths)
+		}
+		view.lfolder.rows[2].selected = false
+
+		state.openStructureOverlay(view, true)
+		deadline := time.Now().Add(3 * time.Second)
+		var doc *fileDocument
+		for time.Now().Before(deadline) {
+			state.Wake()
+			for _, candidate := range state.fileWindows.documents {
+				if candidate.hasPreview() {
+					doc = candidate
+					break
+				}
+			}
+			if doc != nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if doc == nil {
+			t.Fatal("overlay document did not finish preparing")
+		}
+		if !doc.isReadOnlyPreview() || len(doc.preview.doc.Overlays) != 1 {
+			t.Fatalf("unexpected overlay doc state: ro=%v overlays=%d", doc.isReadOnlyPreview(), len(doc.preview.doc.Overlays))
+		}
+		ov := doc.preview.doc.Overlays[0]
+		if !ov.Aligned || ov.RMSD > 0.01 || ov.Pairs != 4 {
+			t.Fatalf("unexpected overlay alignment metrics: %+v", ov)
+		}
+		state.closeFileWindows()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenSiblingMessageFromPreview(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "scores.csv")
+	cifPath := filepath.Join(dir, "model_0.cif")
+	if err := os.WriteFile(csvPath, []byte("file,iptm\nmodel_0.cif,0.88\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cifPath, []byte("data_M0\nloop_\n_atom_site.group_PDB\n_atom_site.auth_asym_id\n_atom_site.auth_seq_id\nATOM A 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host := &documentTestHost{}
+	app.UseApplicationRunner(func(start func(app.Host) error) error { return start(host) })
+	t.Cleanup(func() { host.Quit(); app.UseApplicationRunner(nil) })
+
+	if err := app.RunApplication(func(application *app.Application) error {
+		opts := freshOptions(t)
+		opts.Invalidate = func() {}
+		opts.OpenContentWindow = application.OpenContentWindow
+		state := New(opts)
+		t.Cleanup(state.Close)
+		state.openFileLocation(nil, state.messages.FileWindow.Local, csvPath, true, nil, nil)
+
+		waitDocs := func(want int) {
+			t.Helper()
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				state.Wake()
+				ready := 0
+				for _, doc := range state.fileWindows.documents {
+					if doc.hasPreview() {
+						ready++
+					}
+				}
+				if ready >= want {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatalf("timed out waiting for %d ready preview documents", want)
+		}
+		waitDocs(1)
+
+		var csvDoc *fileDocument
+		for _, doc := range state.fileWindows.documents {
+			csvDoc = doc
+		}
+		if csvDoc.preview.doc.Descriptor.Kind != filepreview.KindTable {
+			t.Fatalf("expected table kind, got %v", csvDoc.preview.doc.Descriptor.Kind)
+		}
+		csvDoc.handlePreviewMessage(`{"type":"open-sibling","path":"model_0.cif"}`)
+		waitDocs(2)
+
+		var foundStruct bool
+		for _, doc := range state.fileWindows.documents {
+			if doc.name == "model_0.cif" && doc.preview.doc.Descriptor.Kind == filepreview.KindStructure {
+				foundStruct = true
+			}
+		}
+		if !foundStruct {
+			t.Fatal("sibling model_0.cif did not open as structure preview")
+		}
+		state.closeFileWindows()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTerminalPreviewClassifyAndOpenLocalAndRemote(t *testing.T) {
+	hasKind := func(actions []detected, want actionKind) bool {
+		for _, a := range actions {
+			if a.kind == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, previewable := range []string{"./fold_model_0.cif", "runs/metrics.csv", "/tmp/ligands.smi", "~/fig.svg", "out/pae.pdb.gz"} {
+		if got := classifyToken(previewable, "alice"); !hasKind(got, actionPreview) {
+			t.Errorf("classifyToken(%q) = %+v, want actionPreview", previewable, got)
+		}
+	}
+	if got := classifyToken("src/main.go", "alice"); hasKind(got, actionPreview) {
+		t.Errorf("classifyToken(src/main.go) unexpectedly offered actionPreview: %+v", got)
+	}
+
+	// Remote path resolution tests
+	remoteSess := &Session{
+		term: &terminal{reportedDirectory: term.Cwd{Path: "/scratch/af3_run"}},
+	}
+	if got := resolveRemoteTerminalPath(remoteSess, "outputs/model.cif"); got != "/scratch/af3_run/outputs/model.cif" {
+		t.Fatalf("relative remote path mismatch: %q", got)
+	}
+	if got := resolveRemoteTerminalPath(remoteSess, "/data/ref.pdb"); got != "/data/ref.pdb" {
+		t.Fatalf("absolute remote path mismatch: %q", got)
+	}
+	if got := resolveRemoteTerminalPath(remoteSess, "~/runs/hits.csv"); got != "~/runs/hits.csv" {
+		t.Fatalf("home remote path mismatch: %q", got)
+	}
+
+	// Local Cmd+Click preview opening
+	dir := t.TempDir()
+	pdbPath := filepath.Join(dir, "1ubq.pdb")
+	if err := os.WriteFile(pdbPath, []byte("ATOM      1  CA  MET A   1       1.000   2.000   3.000  1.00 90.00           C\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	host := &documentTestHost{}
+	app.UseApplicationRunner(func(start func(app.Host) error) error { return start(host) })
+	t.Cleanup(func() { host.Quit(); app.UseApplicationRunner(nil) })
+
+	if err := app.RunApplication(func(application *app.Application) error {
+		opts := freshOptions(t)
+		opts.Invalidate = func() {}
+		opts.OpenContentWindow = application.OpenContentWindow
+		state := New(opts)
+		t.Cleanup(state.Close)
+		localSess := &Session{
+			ID:     1,
+			HostID: localHostID,
+			term:   &terminal{reportedDirectory: term.Cwd{Path: dir}},
+		}
+		if !state.openTerminalFilePreview(localSess, "1ubq.pdb") {
+			t.Fatal("openTerminalFilePreview returned false for existing local PDB")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		var opened *fileDocument
+		for time.Now().Before(deadline) {
+			state.Wake()
+			for _, doc := range state.fileWindows.documents {
+				if doc.hasPreview() {
+					opened = doc
+				}
+			}
+			if opened != nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if opened == nil || opened.preview.doc.Descriptor.Kind != filepreview.KindStructure {
+			t.Fatalf("expected opened PDB structure preview, got %+v", opened)
+		}
+		state.closeFileWindows()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

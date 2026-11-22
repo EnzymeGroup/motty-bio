@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"motty/internal/filepreview"
 )
 
 // What a person points at in terminal output and wants to do something with:
@@ -25,6 +27,7 @@ const (
 	actionFiles                     // show the folder of Target in the file browser
 	actionReveal                    // show Target in this computer's file manager
 	actionExtract                   // type the command that unpacks Target
+	actionPreview                   // open Target in Motty's built-in preview window
 )
 
 // detected is one thing the menu offers for the text under the pointer.
@@ -170,6 +173,9 @@ func classifyFile(token string) []detected {
 	absolute := strings.HasPrefix(filename, "/") || strings.HasPrefix(filename, "~/")
 	relative := strings.HasPrefix(filename, "./") || strings.HasPrefix(filename, "../")
 	var found []detected
+	if filepreview.IsPreviewableName(filename) {
+		found = append(found, detected{kind: actionPreview, target: filename, label: path.Base(filename)})
+	}
 	if line := extractLine(filename); line != "" && !strings.HasSuffix(filename, "/") {
 		found = append(found, detected{kind: actionExtract, target: line, label: path.Base(filename)})
 	}

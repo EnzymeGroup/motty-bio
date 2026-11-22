@@ -5,7 +5,7 @@ import (
 	"motty/internal/sshconn"
 )
 
-var sftpWindowActionIDs = [...]gfx.ID{hitSFTPOpenEntry, hitSFTPDownload, hitSFTPDownloadHere, hitSFTPSend, hitSFTPEditExternal, hitSFTPRename, hitSFTPMove, hitSFTPChmod, hitSFTPChown, hitSFTPExtract, hitSFTPCompress, hitSFTPDelete, hitSFTPNewDirectory, hitSFTPUpload, hitSFTPUploadDirectory, hitSFTPNewLink, hitSFTPProperties, hitSFTPCalculateDirectorySize}
+var sftpWindowActionIDs = [...]gfx.ID{hitSFTPOpenEntry, hitSFTPOverlayStructures, hitSFTPDownload, hitSFTPDownloadHere, hitSFTPSend, hitSFTPEditExternal, hitSFTPRename, hitSFTPMove, hitSFTPChmod, hitSFTPChown, hitSFTPExtract, hitSFTPCompress, hitSFTPDelete, hitSFTPNewDirectory, hitSFTPUpload, hitSFTPUploadDirectory, hitSFTPNewLink, hitSFTPProperties, hitSFTPCalculateDirectorySize}
 
 func sftpWindowActionIndex(id gfx.ID) int {
 	for i, action := range sftpWindowActionIDs {
@@ -56,6 +56,8 @@ func (w *sftpWindow) selectionActions(local bool) []sftpWindowAction {
 	}
 	if count == 1 {
 		add(hitSFTPOpenEntry, iconFolderOpen, m.SFTPOpen)
+	} else if len(selectedStructurePaths(w.view, local)) >= 2 {
+		add(hitSFTPOverlayStructures, iconColumns2, m.Tools.SFTPOverlayStructures)
 	}
 	if local {
 		if count == 1 && folder.rows[selected].entry.Mode.IsRegular() {
@@ -123,6 +125,8 @@ func (w *sftpWindow) fileAction(local bool, id gfx.ID) {
 				break
 			}
 		}
+	case hitSFTPOverlayStructures:
+		w.owner.openStructureOverlay(w.view, local)
 	case hitSFTPSend:
 		w.queueSelection(true)
 	case hitSFTPDownloadHere:

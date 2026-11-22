@@ -598,6 +598,8 @@ func (state *State) clickSFTP(id gfx.ID) {
 		state.openSFTPDialog(view, sftpDialogCreateDirectory)
 	case id == hitSFTPOpenEntry && !view.busy:
 		state.openSelectedSFTP(view)
+	case id == hitSFTPOverlayStructures && !view.busy:
+		state.openStructureOverlay(view, false)
 	case id == hitSFTPEditExternal && !view.busy:
 		state.startExternalEdit(session, view)
 	case id == hitSFTPRename && !view.busy:
