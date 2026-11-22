@@ -21,21 +21,86 @@ import (
 // end-to-end under the motty-view:// custom URL scheme.
 // Run manually with: go test -tags webviewtest -v ./internal/filepreview
 func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
-	pdbBytes, err := os.ReadFile("/Users/jxtang/Desktop/CodeProjects/MyKit/components/molstar-viewer/typescript/test/fixtures/1UBQ.pdb")
-	if err != nil {
-		pdbBytes = []byte("ATOM      1  N   MET A   1      27.340  24.430   2.614  1.00 92.50           N\n" +
-			"ATOM      2  CA  MET A   1      26.266  25.413   2.842  1.00 94.10           C\n" +
-			"ATOM      3  C   MET A   1      26.854  26.824   2.921  1.00 93.20           C\n" +
-			"ATOM      4  O   MET A   1      27.886  27.090   2.301  1.00 91.00           O\n")
-	}
-	cifBytes, err := os.ReadFile("/Users/jxtang/Desktop/CodeProjects/MyKit/components/molstar-viewer/typescript/test/fixtures/1CRN.cif")
-	if err != nil {
-		t.Fatalf("read 1CRN.cif: %v", err)
-	}
-	sdfBytes, err := os.ReadFile("/Users/jxtang/Desktop/CodeProjects/MyKit/components/molstar-viewer/typescript/test/fixtures/ethanol.sdf")
-	if err != nil {
-		t.Fatalf("read ethanol.sdf: %v", err)
-	}
+	pdbBytes := []byte("HEADER    EXPERIMENTAL TEST STRUCTURE\n" +
+		"EXPDTA    X-RAY DIFFRACTION\n" +
+		"ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 18.20           N\n" +
+		"ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 17.50           C\n" +
+		"ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00 19.10           C\n" +
+		"ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00 20.40           O\n" +
+		"ATOM      5  N   GLY A   2       3.330   1.530   0.000  1.00 16.80           N\n" +
+		"ATOM      6  CA  GLY A   2       4.000   2.820   0.000  1.00 15.90           C\n" +
+		"ATOM      7  C   GLY A   2       5.510   2.660   0.000  1.00 16.40           C\n" +
+		"ATOM      8  O   GLY A   2       6.040   1.550   0.000  1.00 18.00           O\n" +
+		"ATOM      9  N   SER A   3       6.190   3.800   0.000  1.00 21.30           N\n" +
+		"ATOM     10  CA  SER A   3       7.640   3.850   0.000  1.00 22.10           C\n" +
+		"ATOM     11  C   SER A   3       8.180   5.270   0.000  1.00 23.00           C\n" +
+		"ATOM     12  O   SER A   3       7.420   6.240   0.000  1.00 24.50           O\n" +
+		"ATOM     13  N   VAL A   4       9.500   5.380   0.000  1.00 19.80           N\n" +
+		"ATOM     14  CA  VAL A   4      10.170   6.670   0.000  1.00 18.70           C\n" +
+		"ATOM     15  C   VAL A   4      11.680   6.510   0.000  1.00 20.20           C\n" +
+		"ATOM     16  O   VAL A   4      12.210   5.400   0.000  1.00 21.10           O\n" +
+		"END\n")
+	cifBytes := []byte(`data_1CRN
+#
+_entry.id 1CRN
+_exptl.entry_id 1CRN
+_exptl.method 'X-RAY DIFFRACTION'
+#
+loop_
+_entity.id
+_entity.type
+1 polymer
+#
+loop_
+_entity_poly.entity_id
+_entity_poly.type
+1 polypeptide(L)
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1  N N  . THR A 1 1 ? 0.000  0.000 0.000 1.00 12.50 1 A 1
+ATOM 2  C CA . THR A 1 1 ? 1.458  0.000 0.000 1.00 11.80 1 A 1
+ATOM 3  C C  . THR A 1 1 ? 2.009  1.420 0.000 1.00 12.10 1 A 1
+ATOM 4  O O  . THR A 1 1 ? 1.251  2.390 0.000 1.00 13.40 1 A 1
+ATOM 5  N N  . THR A 1 2 ? 3.330  1.530 0.000 1.00 10.90 2 A 1
+ATOM 6  C CA . THR A 1 2 ? 4.000  2.820 0.000 1.00 10.40 2 A 1
+ATOM 7  C C  . THR A 1 2 ? 5.510  2.660 0.000 1.00 11.00 2 A 1
+ATOM 8  O O  . THR A 1 2 ? 6.040  1.550 0.000 1.00 11.90 2 A 1
+ATOM 9  N N  . CYS A 1 3 ? 6.190  3.800 0.000 1.00 14.20 3 A 1
+ATOM 10 C CA . CYS A 1 3 ? 7.640  3.850 0.000 1.00 14.80 3 A 1
+ATOM 11 C C  . CYS A 1 3 ? 8.180  5.270 0.000 1.00 15.10 3 A 1
+ATOM 12 O O  . CYS A 1 3 ? 7.420  6.240 0.000 1.00 16.00 3 A 1
+ATOM 13 N N  . CYS A 1 4 ? 9.500  5.380 0.000 1.00 13.50 4 A 1
+ATOM 14 C CA . CYS A 1 4 ? 10.170 6.670 0.000 1.00 13.10 4 A 1
+ATOM 15 C C  . CYS A 1 4 ? 11.680 6.510 0.000 1.00 14.00 4 A 1
+ATOM 16 O O  . CYS A 1 4 ? 12.210 5.400 0.000 1.00 14.90 4 A 1
+#
+`)
+	sdfBytes := []byte("ethanol\n  motty-test\n\n" +
+		"  3  2  0  0  0  0  0  0  0  0999 V2000\n" +
+		"    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n" +
+		"    1.5400    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n" +
+		"    2.0400    1.3400    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0\n" +
+		"  1  2  1  0  0  0  0\n" +
+		"  2  3  1  0  0  0  0\n" +
+		"M  END\n$$$$\n")
 
 	// Minimal valid 1-page PDF 1.4.
 	pdfBytes := []byte("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +

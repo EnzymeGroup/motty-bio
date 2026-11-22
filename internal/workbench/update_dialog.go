@@ -128,12 +128,12 @@ func (state *State) declareUpdateDialog(c ui.C) {
 	install := state.canInstallUpdate()
 	why := state.whyNoInstall()
 	primary := components.ButtonAction{ID: hitUpdateDownload, Label: m.GeneralUpdateDownload}
-	description := fmt.Sprintf(m.UpdateDialogDescriptionFmt, update.Current)
+	description := fmt.Sprintf(m.UpdateDialogDescriptionFmt, update.CurrentVersion())
 	if install {
 		primary = components.ButtonAction{ID: hitUpdateInstall, Label: m.UpdateInstall}
-		description = fmt.Sprintf(m.UpdateInstallDescriptionFmt, update.Current)
+		description = fmt.Sprintf(m.UpdateInstallDescriptionFmt, update.CurrentVersion())
 		if state.options.Updater.Package() == update.PackageDeb {
-			description = fmt.Sprintf(m.UpdateDebDescriptionFmt, update.Current)
+			description = fmt.Sprintf(m.UpdateDebDescriptionFmt, update.CurrentVersion())
 		}
 	}
 

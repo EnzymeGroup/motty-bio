@@ -244,6 +244,9 @@ const cnbReleases = "https://cnb.cool/dbxio.com/motty/-/releases/download/"
 // or cannot be reached. Each feed gets its own attempt timeout: a stalled Viva
 // feed must not spend the time the mirror or GitHub fallback needs.
 func CheckPackage(ctx context.Context, client *http.Client, goos, goarch string, pkg Package) (Release, error) {
+	if isBioBuild() {
+		return CheckBio(ctx, client, goos, goarch, pkg)
+	}
 	if pkg != PackageDeb {
 		attempt, cancel := context.WithTimeout(ctx, feedAttemptTimeout)
 		release, err := checkVivaPackageAt(attempt, client, VivaFeed, []string{VivaPublicKey}, goos, goarch, pkg)
@@ -262,6 +265,9 @@ func CheckPackage(ctx context.Context, client *http.Client, goos, goarch string,
 // is then the CNB one, because that is the source the user chose. A .deb has no
 // asset in the signed feed, so it keeps the official path whatever the source.
 func CheckPackageFrom(ctx context.Context, client *http.Client, goos, goarch string, pkg Package, source Source) (Release, error) {
+	if isBioBuild() {
+		return CheckBio(ctx, client, goos, goarch, pkg)
+	}
 	if source != SourceCNB || pkg == PackageDeb {
 		return CheckPackage(ctx, client, goos, goarch, pkg)
 	}
@@ -693,20 +699,10 @@ func validSignature(signature string) string {
 	return signature
 }
 
-// Newer reports whether latest is a later version than current. Either that is
-// not a plain dotted number is "no".
+// Newer reports whether latest is a later version than current. Supports plain
+// dotted numbers as well as Motty Bio derivative versions (e.g. 0.4.25-bio.2).
 func Newer(current, latest string) bool {
-	a, okA := parse(strings.TrimPrefix(current, "v"))
-	b, okB := parse(strings.TrimPrefix(latest, "v"))
-	if !okA || !okB {
-		return false
-	}
-	for index := range a {
-		if a[index] != b[index] {
-			return b[index] > a[index]
-		}
-	}
-	return false
+	return newerBioVersion(current, latest)
 }
 
 func parse(version string) (parts [3]int, ok bool) {

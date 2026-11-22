@@ -478,7 +478,7 @@ func (state *State) checkForUpdates(asked bool) {
 				} else {
 					state.update.text = ""
 				}
-			case update.Newer(update.Current, release.Version):
+			case update.Newer(update.CurrentVersion(), release.Version):
 				state.update.release, state.update.available = release, true
 				state.update.notes = updateNotes{text: release.Notes}
 				state.update.text = fmt.Sprintf(m.UpdateAvailableFmt, release.Version)
@@ -499,7 +499,7 @@ func (state *State) checkForUpdates(asked bool) {
 			default:
 				state.update.available = false
 				if asked {
-					state.update.text = fmt.Sprintf(m.UpdateLatestFmt, update.Current)
+					state.update.text = fmt.Sprintf(m.UpdateLatestFmt, update.CurrentVersion())
 				} else {
 					state.update.text = ""
 				}
