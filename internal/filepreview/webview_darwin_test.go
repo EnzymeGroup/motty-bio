@@ -45,12 +45,23 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 		"trailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF\n")
 
 	type probeCase struct {
-		name      string
-		fileName  string
-		data      []byte
-		siblings  map[string][]byte
-		waitReady bool // true for Mol* ready message; false uses Eval probe after WebLoadFinished
-		probeJS   string
+		name            string
+		fileName        string
+		data            []byte
+		doc             *Document // optional pre-prepared Document (e.g. PrepareOverlay)
+		siblings        map[string][]byte
+		siblingNames    []string
+		waitReady       bool // true for Mol* ready message; false uses Eval probe after WebLoadFinished
+		wantMinOverlays int
+		probeJS         string
+	}
+	shiftedPDB := transformPDB(pdbBytes, rotXYZ(0.6, -0.4, 0.9), vec3{18.0, -12.0, 9.0})
+	overlayDoc, err := PrepareOverlay([]OverlayInput{
+		{Name: "1UBQ_ref.pdb", Data: pdbBytes},
+		{Name: "1UBQ_mob.pdb", Data: shiftedPDB},
+	}, true, 20<<20)
+	if err != nil {
+		t.Fatalf("PrepareOverlay: %v", err)
 	}
 	cases := []probeCase{
 		{
@@ -58,6 +69,12 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 			fileName:  "1UBQ.pdb",
 			data:      pdbBytes,
 			waitReady: true,
+		},
+		{
+			name:            "Overlay-MolStar",
+			doc:             overlayDoc,
+			waitReady:       true,
+			wantMinOverlays: 2,
 		},
 		{
 			name:      "mmCIF-MolStar",
@@ -86,6 +103,72 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 			fileName:  "water.xyz",
 			data:      []byte("3\nwater molecule\nO 0.000 0.000 0.000\nH 0.757 0.586 0.000\nH -0.757 0.586 0.000\n"),
 			waitReady: true,
+		},
+		{
+			name:     "AF3-Confidence",
+			fileName: "fold_confidences_0.json",
+			data: []byte(`{
+				"ranking_score": 0.87,
+				"iptm": 0.84,
+				"ptm": 0.91,
+				"fraction_disordered": 0.04,
+				"has_clash": 0,
+				"token_chain_ids": ["A","A","A","B","B","B"],
+				"atom_plddts": [94.2, 91.8, 88.5, 76.4, 82.1, 90.0],
+				"chain_pair_iptm": [[0.92, 0.84], [0.84, 0.89]],
+				"pae": [
+					[0.4, 1.2, 2.5, 9.8, 11.2, 12.0],
+					[1.1, 0.3, 1.4, 8.9, 10.1, 11.5],
+					[2.3, 1.3, 0.5, 7.6, 8.4, 9.2],
+					[9.5, 8.7, 7.4, 0.5, 1.6, 2.8],
+					[11.0, 10.0, 8.5, 1.5, 0.4, 1.7],
+					[12.1, 11.4, 9.1, 2.7, 1.6, 0.5]
+				]
+			}`),
+			siblingNames: []string{"fold_confidences_0.json", "fold_model_0.cif"},
+			probeJS: `setTimeout(() => {
+				const kpis = document.querySelectorAll('.kpi').length;
+				const canvases = document.querySelectorAll('canvas').length;
+				const paired = document.getElementById('paired-select')?.value || '';
+				const ok = kpis >= 4 && canvases >= 2 && paired === 'fold_model_0.cif';
+				window.viva.postMessage(JSON.stringify({ type: 'probe', ok, detail: 'kpis=' + kpis + ' canvases=' + canvases + ' paired=' + paired }));
+			}, 350);`,
+		},
+		{
+			name:     "CSV-Table",
+			fileName: "scores.csv",
+			data:     []byte("id,iptm,rmsd,smiles,structure\nm1,0.89,1.12,CCO,fold_model_0.cif\nm2,0.72,2.85,CC(=O)Oc1ccccc1C(=O)O,fold_model_1.cif\n"),
+			probeJS: `setTimeout(() => {
+				const rowsBefore = document.querySelectorAll('#tbody tr').length;
+				const fileLinks = document.querySelectorAll('.file-link').length;
+				const smiLink = document.querySelector('.smi-link');
+				if (smiLink) smiLink.click();
+				const filter = document.getElementById('filter');
+				filter.value = 'iptm > 0.8';
+				filter.dispatchEvent(new Event('input'));
+				setTimeout(() => {
+					const rowsAfter = document.querySelectorAll('#tbody tr').length;
+					const svgNodes = document.querySelectorAll('#smi-svg svg path, #smi-svg svg line').length;
+					const ok = rowsBefore === 2 && fileLinks === 2 && rowsAfter === 1 && svgNodes > 0;
+					window.viva.postMessage(JSON.stringify({ type: 'probe', ok, detail: 'before=' + rowsBefore + ' after=' + rowsAfter + ' links=' + fileLinks + ' smiSvgNodes=' + svgNodes }));
+				}, 200);
+			}, 300);`,
+		},
+		{
+			name:     "SMILES-2D",
+			fileName: "ligands.smi",
+			data: []byte("SMILES Name\n" +
+				"CC(=O)Oc1ccccc1C(=O)O Aspirin\n" +
+				"CN1C=NC2=C1C(=O)N(C(=O)N2C)C Caffeine\n" +
+				"CC(C)Cc1ccc(cc1)C(C)C(=O)O Ibuprofen\n" +
+				"CCO.CC(=O)O>>CCOC(=O)C.O Esterification\n"),
+			probeJS: `setTimeout(() => {
+				const cards = [...document.querySelectorAll('.card')];
+				const drawn = cards.filter(c => c.querySelectorAll('svg path, svg line').length > 0).length;
+				const formulas = cards.map(c => c.querySelector('.mol-formula')?.textContent || '').filter(Boolean);
+				const ok = cards.length === 4 && drawn === 4 && formulas.length >= 3;
+				window.viva.postMessage(JSON.stringify({ type: 'probe', ok, detail: 'cards=' + cards.length + ' drawn=' + drawn + ' formulas=' + formulas.join(',') }));
+			}, 450);`,
 		},
 		{
 			name:     "A3M-Sequence",
@@ -158,10 +241,14 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 			return
 		}
 		tc := cases[idx]
-		doc, err := Prepare(tc.fileName, tc.data, 20<<20)
-		if err != nil || doc == nil {
-			finish(fmt.Sprintf("%s: Prepare failed: %v", tc.name, err))
-			return
+		doc := tc.doc
+		var err error
+		if doc == nil {
+			doc, err = Prepare(tc.fileName, tc.data, 20<<20)
+			if err != nil || doc == nil {
+				finish(fmt.Sprintf("%s: Prepare failed: %v", tc.name, err))
+				return
+			}
 		}
 		source := Source{
 			Doc:   func() *Document { return doc },
@@ -171,6 +258,9 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 					return b, nil
 				}
 				return nil, os.ErrNotExist
+			},
+			ListSiblings: func(context.Context) ([]string, error) {
+				return tc.siblingNames, nil
 			},
 		}
 		scheme := &app.WebScheme{
@@ -195,13 +285,14 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 			BridgeMainFrameOnly: true,
 			OnMessage: func(raw string) {
 				var msg struct {
-					Type    string `json:"type"`
-					Atoms   int    `json:"atoms"`
-					Mode    string `json:"mode"`
-					Palette string `json:"palette"`
-					Message string `json:"message"`
-					OK      bool   `json:"ok"`
-					Detail  string `json:"detail"`
+					Type         string `json:"type"`
+					Atoms        int    `json:"atoms"`
+					Mode         string `json:"mode"`
+					Palette      string `json:"palette"`
+					OverlayCount int    `json:"overlayCount"`
+					Message      string `json:"message"`
+					OK           bool   `json:"ok"`
+					Detail       string `json:"detail"`
 				}
 				if err := json.Unmarshal([]byte(raw), &msg); err != nil {
 					return
@@ -216,7 +307,11 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 							finish(fmt.Sprintf("%s: ready with 0 atoms", tc.name))
 							return
 						}
-						results = append(results, fmt.Sprintf("%s: OK (atoms=%d mode=%s palette=%s)", tc.name, msg.Atoms, msg.Mode, msg.Palette))
+						if tc.wantMinOverlays > 0 && msg.OverlayCount < tc.wantMinOverlays {
+							finish(fmt.Sprintf("%s: expected >=%d overlays, got %d", tc.name, tc.wantMinOverlays, msg.OverlayCount))
+							return
+						}
+						results = append(results, fmt.Sprintf("%s: OK (atoms=%d mode=%s palette=%s overlays=%d)", tc.name, msg.Atoms, msg.Mode, msg.Palette, msg.OverlayCount))
 						idx++
 						startNext()
 					}
@@ -264,7 +359,7 @@ func TestLiveWKWebViewAllPreviewKinds(t *testing.T) {
 	web.OnReady = func() {
 		startNext()
 		go func() {
-			time.Sleep(25 * time.Second)
+			time.Sleep(40 * time.Second)
 			inv.Post(func() {
 				if !done {
 					finish(fmt.Sprintf("timeout at case %d (%s); completed=%v", idx, cases[min(idx, len(cases)-1)].name, results))

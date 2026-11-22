@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AF3 / PAE Confidence Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: rgba(15, 23, 42, 0.12);
+  --fg: #111827;
+  --muted: #64748b;
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e24;
+  --surface-2: #242830;
+  --border: rgba(255, 255, 255, 0.11);
+  --fg: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+body { display: flex; flex-direction: column; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+button, select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 8px;
+  outline: none;
+}
+button { cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+button:hover { background: var(--surface-2); }
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.spacer { flex: 1; }
+.title-badge {
+  font-weight: 600;
+  font-size: 12px;
+}
+.main {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  gap: 8px;
+}
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.kpi-label {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.kpi-val {
+  margin-top: 3px;
+  font-size: 18px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-title { font-weight: 600; font-size: 12.5px; }
+.card-sub {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.heatmap-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+canvas.heatmap {
+  width: 100%;
+  max-width: 460px;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+.colorbar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex-shrink: 0;
+}
+.colorbar-bar {
+  width: 12px;
+  height: 180px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+canvas.curve {
+  width: 100%;
+  height: 210px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+}
+table.matrix {
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+table.matrix th, table.matrix td {
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: center;
+  min-width: 48px;
+}
+table.matrix th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+.empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+}
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <span id="title-badge" class="title-badge">Confidence &amp; PAE</span>
+  <select id="cmap" title="PAE colormap">
+    <option value="af">AlphaFold Green</option>
+    <option value="viridis">Viridis</option>
+    <option value="rdbu">Blue–Red</option>
+  </select>
+  <button id="tab-pae" class="active" style="display:none">PAE Matrix</button>
+  <button id="tab-contact" style="display:none">Contact Probs</button>
+  <div class="spacer"></div>
+  <select id="paired-select" style="display:none" title="Structures in same folder"></select>
+  <button id="paired-open" class="primary" style="display:none">Open 3D Structure</button>
+</header>
+<main id="main" class="main">
+  <div class="empty">Parsing confidence JSON...</div>
+</main>
+<script>
+const mainEl = document.getElementById('main');
+const titleBadge = document.getElementById('title-badge');
+const cmapEl = document.getElementById('cmap');
+const tabPaeBtn = document.getElementById('tab-pae');
+const tabContactBtn = document.getElementById('tab-contact');
+const pairedSelect = document.getElementById('paired-select');
+const pairedOpen = document.getElementById('paired-open');
+
+let meta = { name: 'confidences.json', dark: false };
+let parsed = null;
+let activeMatrix = 'pae'; // 'pae' | 'contact'
+let paeState = null;
+let plddtState = null;
+
+function applyTheme(dark) {
+  meta.dark = Boolean(dark);
+  document.documentElement.dataset.theme = meta.dark ? 'dark' : 'light';
+  if (parsed) renderAll();
+}
+
+function sampleColor(t, mode) {
+  t = Math.max(0, Math.min(1, t));
+  if (mode === 'viridis') {
+    // Viridis stops (low=purple/dark, high=yellow; invert so low PAE=bright/good or keep standard)
+    const stops = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+    const x = t * (stops.length - 1);
+    const i = Math.min(stops.length - 2, Math.floor(x));
+    const f = x - i;
+    return [
+      Math.round(stops[i][0] + (stops[i+1][0] - stops[i][0]) * f),
+      Math.round(stops[i][1] + (stops[i+1][1] - stops[i][1]) * f),
+      Math.round(stops[i][2] + (stops[i+1][2] - stops[i][2]) * f),
+    ];
+  }
+  if (mode === 'rdbu') {
+    const stops = [[15, 76, 129], [107, 174, 214], [247, 247, 247], [244, 165, 130], [178, 24, 43]];
+    const x = t * (stops.length - 1);
+    const i = Math.min(stops.length - 2, Math.floor(x));
+    const f = x - i;
+    return [
+      Math.round(stops[i][0] + (stops[i+1][0] - stops[i][0]) * f),
+      Math.round(stops[i][1] + (stops[i+1][1] - stops[i][1]) * f),
+      Math.round(stops[i][2] + (stops[i+1][2] - stops[i][2]) * f),
+    ];
+  }
+  // AlphaFold green: 0 Å -> deep green (#005a32), 31.75 Å -> white (#ffffff)
+  const stops = [[0, 77, 41], [35, 139, 69], [116, 196, 118], [199, 233, 192], [250, 252, 250]];
+  const x = t * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(x));
+  const f = x - i;
+  return [
+    Math.round(stops[i][0] + (stops[i+1][0] - stops[i][0]) * f),
+    Math.round(stops[i][1] + (stops[i+1][1] - stops[i][1]) * f),
+    Math.round(stops[i][2] + (stops[i+1][2] - stops[i][2]) * f),
+  ];
+}
+
+function plddtColor(v) {
+  if (v >= 90) return '#0053d6';
+  if (v >= 70) return '#65cbf3';
+  if (v >= 50) return '#ffdb13';
+  return '#ff7d45';
+}
+
+function normalizeConfidence(obj) {
+  const kpis = [];
+  const addNum = (label, val, digits = 3, unit = '') => {
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      kpis.push({ label, value: val.toFixed(digits) + unit });
+    }
+  };
+  addNum('Ranking Score', obj.ranking_score, 3);
+  addNum('Confidence', obj.confidence_score, 3);
+  addNum('ipTM', obj.iptm, 3);
+  addNum('pTM', obj.ptm, 3);
+  addNum('Protein ipTM', obj.protein_iptm, 3);
+  addNum('Ligand ipTM', obj.ligand_iptm, 3);
+  addNum('Complex pLDDT', obj.complex_plddt, 2);
+  addNum('Interface pLDDT', obj.complex_iplddt, 2);
+  addNum('Complex PDE', obj.complex_pde, 2, ' Å');
+  addNum('Disordered', obj.fraction_disordered, 3);
+  if (typeof obj.has_clash === 'number' || typeof obj.has_clash === 'boolean') {
+    kpis.push({ label: 'Has Clash', value: obj.has_clash ? 'Yes' : 'No' });
+  }
+  if (typeof obj.num_recycles === 'number') {
+    kpis.push({ label: 'Recycles', value: String(obj.num_recycles) });
+  }
+
+  // PAE matrix (AF3: pae, AF2/ColabFold: predicted_aligned_error, nested array or flat)
+  let pae = Array.isArray(obj.pae) ? obj.pae : Array.isArray(obj.predicted_aligned_error) ? obj.predicted_aligned_error : null;
+  if (pae && pae.length && !Array.isArray(pae[0])) pae = null;
+  let contact = Array.isArray(obj.contact_probs) && Array.isArray(obj.contact_probs[0]) ? obj.contact_probs : null;
+
+  // Per-residue/token pLDDT: prefer token-level or collapse atom_plddts
+  let plddt = null;
+  let plddtChains = null;
+  if (Array.isArray(obj.plddt) && typeof obj.plddt[0] === 'number') {
+    plddt = obj.plddt;
+  } else if (Array.isArray(obj.atom_plddts) && typeof obj.atom_plddts[0] === 'number') {
+    // Downsample very long atom arrays into residue-sized bins (~8 atoms/res) if > 2000
+    const src = obj.atom_plddts;
+    const ch = Array.isArray(obj.atom_chain_ids) ? obj.atom_chain_ids : null;
+    if (src.length <= 2000) {
+      plddt = src;
+      plddtChains = ch;
+    } else {
+      const bin = Math.ceil(src.length / 1000);
+      plddt = [];
+      plddtChains = ch ? [] : null;
+      for (let i = 0; i < src.length; i += bin) {
+        let sum = 0, n = 0;
+        for (let j = i; j < Math.min(i + bin, src.length); j++) { sum += src[j]; n++; }
+        plddt.push(sum / n);
+        if (plddtChains) plddtChains.push(ch[i]);
+      }
+    }
+    const mean = src.reduce((a, b) => a + b, 0) / src.length;
+    if (!kpis.some(k => k.label.toLowerCase().includes('plddt'))) {
+      const scaled = mean <= 1.05 ? mean * 100 : mean;
+      kpis.push({ label: 'Mean pLDDT', value: scaled.toFixed(1) });
+    }
+  }
+  if (plddt && plddt.length && Math.max(...plddt.slice(0, 200)) <= 1.05) {
+    plddt = plddt.map(v => v * 100);
+  }
+  if (plddt && !kpis.some(k => k.label.toLowerCase().includes('plddt'))) {
+    const mean = plddt.reduce((a, b) => a + b, 0) / plddt.length;
+    kpis.push({ label: 'Mean pLDDT', value: mean.toFixed(1) });
+  }
+
+  // Token chains for PAE boundaries
+  const tokenChains = Array.isArray(obj.token_chain_ids) ? obj.token_chain_ids : null;
+  const tokenRes = Array.isArray(obj.token_res_ids) ? obj.token_res_ids : null;
+
+  // Chain-pair matrices (AF3 summary or Boltz)
+  const pairIptm = Array.isArray(obj.chain_pair_iptm) ? obj.chain_pair_iptm : null;
+  const pairPaeMin = Array.isArray(obj.chain_pair_pae_min) ? obj.chain_pair_pae_min : null;
+  const boltzPairIptm = obj.pair_chains_iptm && typeof obj.pair_chains_iptm === 'object' ? obj.pair_chains_iptm : null;
+  const chainPtm = Array.isArray(obj.chain_ptm) ? obj.chain_ptm : null;
+  const chainIptm = Array.isArray(obj.chain_iptm) ? obj.chain_iptm : null;
+
+  return {
+    kpis, pae, contact, plddt, plddtChains, tokenChains, tokenRes,
+    maxPae: typeof obj.max_predicted_aligned_error === 'number' ? obj.max_predicted_aligned_error : 31.75,
+    pairIptm, pairPaeMin, boltzPairIptm, chainPtm, chainIptm,
+  };
+}
+
+function chainBoundaries(chains) {
+  if (!chains || !chains.length) return [];
+  const segs = [];
+  let start = 0;
+  for (let i = 1; i <= chains.length; i++) {
+    if (i === chains.length || chains[i] !== chains[start]) {
+      segs.push({ id: String(chains[start]), start, end: i });
+      start = i;
+    }
+  }
+  return segs;
+}
+
+function drawHeatmap(canvas, matrix, maxVal, isContact, chains, resIds, readoutEl) {
+  const N = matrix.length;
+  const size = Math.min(Math.max(N, 200), 600);
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const mode = cmapEl.value;
+  for (let py = 0; py < size; py++) {
+    const r = Math.min(N - 1, Math.floor((py / size) * N));
+    const row = matrix[r];
+    for (let px = 0; px < size; px++) {
+      const c = Math.min(N - 1, Math.floor((px / size) * N));
+      const v = Number(row[c]) || 0;
+      const t = isContact ? (1 - Math.max(0, Math.min(1, v))) : Math.max(0, Math.min(1, v / maxVal));
+      const [R, G, B] = sampleColor(t, mode);
+      const off = (py * size + px) * 4;
+      img.data[off] = R;
+      img.data[off + 1] = G;
+      img.data[off + 2] = B;
+      img.data[off + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Chain boundaries
+  const segs = chainBoundaries(chains);
+  if (segs.length > 1) {
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+    ctx.lineWidth = Math.max(1, size / 300);
+    for (let i = 1; i < segs.length; i++) {
+      const pos = (segs[i].start / N) * size;
+      ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(size, pos); ctx.stroke();
+    }
+    ctx.font = `bold ${Math.max(11, Math.round(size / 34))}px ui-monospace, Menlo, monospace`;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    for (const seg of segs) {
+      const mid = ((seg.start + seg.end) / 2 / N) * size;
+      ctx.fillText(seg.id, mid - 4, 15);
+    }
+  }
+
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(N - 1, Math.floor(((e.clientX - rect.left) / rect.width) * N)));
+    const y = Math.max(0, Math.min(N - 1, Math.floor(((e.clientY - rect.top) / rect.height) * N)));
+    const val = Number(matrix[y]?.[x]);
+    const labelOf = (idx) => {
+      const ch = chains?.[idx] ? `${chains[idx]}:` : '';
+      const res = resIds?.[idx] != null ? resIds[idx] : (idx + 1);
+      return `${ch}${res}`;
+    };
+    readoutEl.textContent = isContact
+      ? `(${labelOf(y)}, ${labelOf(x)}) · P(contact) = ${val.toFixed(3)}`
+      : `Aligned ${labelOf(y)} → Scored ${labelOf(x)} · PAE = ${val.toFixed(2)} Å`;
+  };
+}
+
+function drawPlddtCurve(canvas, values, chains, readoutEl) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(canvas.clientWidth || 440, 320);
+  const h = 210;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const dark = meta.dark;
+  const padL = 36, padR = 12, padT = 12, padB = 24;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  ctx.fillStyle = dark ? '#14161a' : '#f8fafc';
+  ctx.fillRect(0, 0, w, h);
+
+  // Confidence bands
+  const bands = [
+    [90, 100, 'rgba(0,83,214,0.10)'],
+    [70, 90, 'rgba(101,203,243,0.10)'],
+    [50, 70, 'rgba(255,219,19,0.10)'],
+    [0, 50, 'rgba(255,125,69,0.10)'],
+  ];
+  for (const [lo, hi, fill] of bands) {
+    const y1 = padT + (1 - hi / 100) * ph;
+    const y2 = padT + (1 - lo / 100) * ph;
+    ctx.fillStyle = fill;
+    ctx.fillRect(padL, y1, pw, y2 - y1);
+  }
+
+  // Horizontal grid + labels
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)';
+  ctx.fillStyle = dark ? '#94a3b8' : '#64748b';
+  ctx.font = '10px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const yv of [0, 50, 70, 90, 100]) {
+    const y = padT + (1 - yv / 100) * ph;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillText(String(yv), padL - 6, y);
+  }
+
+  // Plot colored segments
+  const n = values.length;
+  ctx.lineWidth = 1.8;
+  for (let i = 1; i < n; i++) {
+    const x0 = padL + ((i - 1) / Math.max(n - 1, 1)) * pw;
+    const x1 = padL + (i / Math.max(n - 1, 1)) * pw;
+    const y0 = padT + (1 - Math.max(0, Math.min(100, values[i - 1])) / 100) * ph;
+    const y1 = padT + (1 - Math.max(0, Math.min(100, values[i])) / 100) * ph;
+    ctx.strokeStyle = plddtColor(values[i]);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - padL) / pw));
+    const idx = Math.min(n - 1, Math.round(frac * (n - 1)));
+    const ch = chains?.[idx] ? `Chain ${chains[idx]} · ` : '';
+    readoutEl.textContent = `${ch}Pos ${idx + 1} · pLDDT = ${values[idx].toFixed(1)}`;
+  };
+}
+
+function buildMatrixTable(title, mat, labels, isPae) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<div class="card-head"><span class="card-title">${title}</span></div>`;
+  const table = document.createElement('table');
+  table.className = 'matrix';
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.innerHTML = '<th></th>' + labels.map(l => `<th>${l}</th>`).join('');
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  for (let i = 0; i < mat.length; i++) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.textContent = labels[i];
+    tr.appendChild(th);
+    for (let j = 0; j < mat[i].length; j++) {
+      const td = document.createElement('td');
+      const v = mat[i][j];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        td.textContent = isPae ? v.toFixed(1) : v.toFixed(2);
+        const good = isPae ? Math.max(0, 1 - v / 30) : Math.max(0, Math.min(1, v));
+        td.style.background = `rgba(34, 197, 94, ${(good * 0.35).toFixed(2)})`;
+      } else {
+        td.textContent = '—';
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  const wrap = document.createElement('div');
+  wrap.style.overflow = 'auto';
+  wrap.appendChild(table);
+  card.appendChild(wrap);
+  return card;
+}
+
+function renderAll() {
+  mainEl.replaceChildren();
+  const d = parsed;
+  if (d.kpis.length) {
+    const kpis = document.createElement('section');
+    kpis.className = 'kpis';
+    for (const k of d.kpis) {
+      const box = document.createElement('div');
+      box.className = 'kpi';
+      box.innerHTML = `<div class="kpi-label"></div><div class="kpi-val"></div>`;
+      box.querySelector('.kpi-label').textContent = k.label;
+      box.querySelector('.kpi-val').textContent = k.value;
+      kpis.appendChild(box);
+    }
+    mainEl.appendChild(kpis);
+  }
+
+  tabPaeBtn.style.display = d.pae && d.contact ? '' : 'none';
+  tabContactBtn.style.display = d.pae && d.contact ? '' : 'none';
+  tabPaeBtn.classList.toggle('active', activeMatrix === 'pae');
+  tabContactBtn.classList.toggle('active', activeMatrix === 'contact');
+
+  const grid = document.createElement('section');
+  grid.className = 'grid';
+
+  const mat = activeMatrix === 'contact' && d.contact ? d.contact : d.pae;
+  const isContact = activeMatrix === 'contact' && Boolean(d.contact);
+  if (mat) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    const title = document.createElement('span');
+    title.className = 'card-title';
+    title.textContent = isContact ? `Contact Probability (${mat.length}×${mat.length})` : `Predicted Aligned Error (${mat.length}×${mat.length})`;
+    const readout = document.createElement('span');
+    readout.className = 'card-sub';
+    readout.textContent = 'Hover matrix to inspect';
+    head.append(title, readout);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'heatmap-wrap';
+    const canvas = document.createElement('canvas');
+    canvas.className = 'heatmap';
+    const bar = document.createElement('div');
+    bar.className = 'colorbar';
+    const barDiv = document.createElement('div');
+    barDiv.className = 'colorbar-bar';
+    const stops = [0, 0.25, 0.5, 0.75, 1].map(t => {
+      const [r, g, b] = sampleColor(t, cmapEl.value);
+      return `rgb(${r},${g},${b})`;
+    });
+    barDiv.style.background = `linear-gradient(to bottom, ${stops.join(',')})`;
+    bar.innerHTML = `<span>${isContact ? '1.0' : '0 Å'}</span>`;
+    bar.appendChild(barDiv);
+    const bot = document.createElement('span');
+    bot.textContent = isContact ? '0.0' : `${Math.round(d.maxPae)} Å`;
+    bar.appendChild(bot);
+    wrap.append(canvas, bar);
+    card.append(head, wrap);
+    grid.appendChild(card);
+    drawHeatmap(canvas, mat, d.maxPae, isContact, d.tokenChains, d.tokenRes, readout);
+  }
+
+  if (d.plddt && d.plddt.length) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    const title = document.createElement('span');
+    title.className = 'card-title';
+    title.textContent = `pLDDT Confidence Profile (${d.plddt.length} pts)`;
+    const readout = document.createElement('span');
+    readout.className = 'card-sub';
+    readout.textContent = 'Hover curve to inspect';
+    head.append(title, readout);
+    const canvas = document.createElement('canvas');
+    canvas.className = 'curve';
+    card.append(head, canvas);
+    grid.appendChild(card);
+    requestAnimationFrame(() => drawPlddtCurve(canvas, d.plddt, d.plddtChains, readout));
+  }
+
+  if (d.pairIptm && d.pairIptm.length) {
+    const labels = d.pairIptm.map((_, i) => String.fromCharCode(65 + (i % 26)));
+    grid.appendChild(buildMatrixTable('Chain-Pair ipTM', d.pairIptm, labels, false));
+  } else if (d.boltzPairIptm) {
+    const keys = Object.keys(d.boltzPairIptm);
+    if (keys.length) {
+      const m = keys.map(r => keys.map(c => d.boltzPairIptm[r]?.[c]));
+      grid.appendChild(buildMatrixTable('Chain-Pair ipTM', m, keys, false));
+    }
+  }
+  if (d.pairPaeMin && d.pairPaeMin.length) {
+    const labels = d.pairPaeMin.map((_, i) => String.fromCharCode(65 + (i % 26)));
+    grid.appendChild(buildMatrixTable('Chain-Pair min PAE (Å)', d.pairPaeMin, labels, true));
+  }
+
+  if (grid.children.length) mainEl.appendChild(grid);
+  else if (!d.kpis.length) mainEl.innerHTML = '<div class="empty">No PAE, pLDDT, or ipTM fields found in this JSON.</div>';
+}
+
+cmapEl.onchange = () => { if (parsed) renderAll(); };
+tabPaeBtn.onclick = () => { activeMatrix = 'pae'; renderAll(); };
+tabContactBtn.onclick = () => { activeMatrix = 'contact'; renderAll(); };
+
+pairedOpen.onclick = () => {
+  const target = pairedSelect.value;
+  if (target && window.viva?.postMessage) {
+    window.viva.postMessage(JSON.stringify({ type: 'open-sibling', path: target }));
+  }
+};
+
+function pickBestStructure(selfName, names) {
+  const stem = selfName.toLowerCase()
+    .replace(/\.json(\.gz)?$/, '')
+    .replace(/(_summary)?_confidences?.*$/, '')
+    .replace(/_full_data.*$/, '')
+    .replace(/^confidence_/, '');
+  let best = names[0], bestScore = -1;
+  for (const n of names) {
+    const ln = n.toLowerCase();
+    let score = 0;
+    if (stem && ln.startsWith(stem)) score += 10;
+    if (ln.endsWith('.cif') || ln.endsWith('.mmcif')) score += 2;
+    if (ln.includes('model')) score += 1;
+    if (score > bestScore) { bestScore = score; best = n; }
+  }
+  return best;
+}
+
+if (window.viva) {
+  window.viva.onmessage = (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'theme') applyTheme(msg.dark);
+    } catch {}
+  };
+}
+
+async function boot() {
+  try {
+    const [metaRes, payloadRes] = await Promise.all([fetch('./meta.json'), fetch('./payload')]);
+    if (!metaRes.ok || !payloadRes.ok) throw new Error('Could not load confidence JSON');
+    meta = { ...meta, ...(await metaRes.json()) };
+    applyTheme(meta.dark);
+    titleBadge.textContent = meta.name;
+    document.title = `${meta.name} — Confidence`;
+    const obj = await payloadRes.json();
+    parsed = normalizeConfidence(obj);
+    renderAll();
+
+    // Probe sibling 3D structures for one-click paired opening.
+    fetch('./siblings.json').then(r => r.ok ? r.json() : []).then(names => {
+      if (!Array.isArray(names) || !names.length) return;
+      const best = pickBestStructure(meta.name, names);
+      for (const n of names) {
+        const opt = document.createElement('option');
+        opt.value = n;
+        opt.textContent = n;
+        if (n === best) opt.selected = true;
+        pairedSelect.appendChild(opt);
+      }
+      pairedSelect.style.display = '';
+      if (window.viva?.postMessage) pairedOpen.style.display = '';
+    }).catch(() => {});
+  } catch (err) {
+    mainEl.innerHTML = `<div class="empty">${String(err?.message || err)}</div>`;
+  }
+}
+boot();
+</script>
+</body>
+</html>

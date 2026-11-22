@@ -52,7 +52,19 @@ func TestDetectSupportedAndRejectedFormats(t *testing.T) {
 		{"plot.svgz", []byte{0x1f, 0x8b}, true, KindSVG, "svg", true, false},
 		{"report.html", []byte("<html></html>"), true, KindHTML, "html", false, true},
 		{"paper.pdf", []byte("%PDF-1.7\n"), true, KindPDF, "pdf", false, false},
+		{"fold_summary_confidences_0.json", []byte(`{"iptm":0.84,"ptm":0.91,"ranking_score":0.86}`), true, KindConfidence, "confidence", false, true},
+		{"fold_confidences_0.json", []byte(`{"pae":[[0,2],[2,0]],"atom_plddts":[91.2,85.4]}`), true, KindConfidence, "confidence", false, true},
+		{"pae.json.gz", gzipBytes(t, []byte(`{"predicted_aligned_error":[[0,1],[1,0]],"plddt":[90,88]}`)), true, KindConfidence, "confidence", true, false},
+		{"metrics.csv", []byte("id,iptm,rmsd\nm1,0.88,1.2\n"), true, KindTable, "csv", false, true},
+		{"metrics.csv.gz", []byte{0x1f, 0x8b}, true, KindTable, "csv", true, false},
+		{"hits.tsv", []byte("id\tscore\nh1\t99.5\n"), true, KindTable, "tsv", false, true},
+		{"scores.jsonl", []byte("{\"id\":\"a\",\"iptm\":0.8}\n"), true, KindTable, "jsonl", false, true},
+		{"scores.ndjson.gz", []byte{0x1f, 0x8b}, true, KindTable, "jsonl", true, false},
+		{"ligands.smi", []byte("CCO ethanol\n"), true, KindSMILES, "smiles", false, true},
+		{"drugs.smiles.gz", []byte{0x1f, 0x8b}, true, KindSMILES, "smiles", true, false},
 		// Rejected cases:
+		{"package.json", []byte(`{"name":"motty","version":"0.4.24"}`), false, KindNone, "", false, false},
+		{"config.json", []byte(`{"host":"localhost","port":22}`), false, KindNone, "", false, false},
 		{"fake.txt", []byte("%PDF-1.7\n"), false, KindNone, "", false, false},
 		{"corrupt.pdf", []byte("not a pdf"), false, KindNone, "", false, false},
 		{"report.html.gz", []byte{0x1f, 0x8b}, false, KindNone, "", false, false},
@@ -214,5 +226,123 @@ func TestLoopbackServerAuthAndServing(t *testing.T) {
 	badResp.Body.Close()
 	if badResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 for bad token, got %d", badResp.StatusCode)
+	}
+}
+
+func TestConfidenceTableSMILESAndOverlayRouting(t *testing.T) {
+	// Summaries for new kinds
+	confJSON := []byte(`{"iptm":0.84,"ptm":0.91,"ranking_score":0.87,"pae":[[0.5,2.1],[2.1,0.4]],"atom_plddts":[92.0,88.0]}`)
+	confDoc, err := Prepare("fold_confidences.json", confJSON, 1<<20)
+	if err != nil || confDoc == nil || confDoc.Descriptor.Kind != KindConfidence {
+		t.Fatalf("Prepare confidence failed: doc=%+v err=%v", confDoc, err)
+	}
+	if !strings.Contains(confDoc.Summary, "score 0.87") || !strings.Contains(confDoc.Summary, "ipTM 0.84") || !strings.Contains(confDoc.Summary, "pTM 0.91") {
+		t.Fatalf("unexpected confidence summary: %q", confDoc.Summary)
+	}
+
+	csvDoc, err := Prepare("scores.csv", []byte("id,iptm,rmsd\nm1,0.85,1.2\nm2,0.72,2.4\n"), 1<<20)
+	if err != nil || csvDoc == nil || csvDoc.Descriptor.Kind != KindTable {
+		t.Fatalf("Prepare csv failed: doc=%+v err=%v", csvDoc, err)
+	}
+	if !strings.Contains(csvDoc.Summary, "2 rows") || !strings.Contains(csvDoc.Summary, "3 cols") {
+		t.Fatalf("unexpected csv summary: %q", csvDoc.Summary)
+	}
+
+	jsonlDoc, err := Prepare("runs.jsonl", []byte("{\"id\":\"r1\",\"score\":1}\n{\"id\":\"r2\",\"score\":2}\n"), 1<<20)
+	if err != nil || jsonlDoc == nil || jsonlDoc.Descriptor.Kind != KindTable {
+		t.Fatalf("Prepare jsonl failed: doc=%+v err=%v", jsonlDoc, err)
+	}
+	if !strings.Contains(jsonlDoc.Summary, "2 records") {
+		t.Fatalf("unexpected jsonl summary: %q", jsonlDoc.Summary)
+	}
+
+	smiDoc, err := Prepare("hits.smi", []byte("SMILES Name\nCCO ethanol\nCC(=O)Oc1ccccc1C(=O)O aspirin\n"), 1<<20)
+	if err != nil || smiDoc == nil || smiDoc.Descriptor.Kind != KindSMILES {
+		t.Fatalf("Prepare smi failed: doc=%+v err=%v", smiDoc, err)
+	}
+	if !strings.Contains(smiDoc.Summary, "2 molecules") {
+		t.Fatalf("unexpected smi summary: %q", smiDoc.Summary)
+	}
+
+	// Confidence sibling discovery
+	confSrc := Source{
+		Doc: func() *Document { return confDoc },
+		ListSiblings: func(context.Context) ([]string, error) {
+			return []string{"fold_confidences.json", "fold_model_0.cif", "notes.txt", "alt.pdb.gz"}, nil
+		},
+	}
+	if resp := Resolve(context.Background(), confSrc, "confidence/index.html"); resp.Status != http.StatusOK {
+		t.Fatalf("confidence index failed: %d", resp.Status)
+	}
+	sibResp := Resolve(context.Background(), confSrc, "confidence/siblings.json")
+	var sibs []string
+	if err := json.Unmarshal(sibResp.Data, &sibs); err != nil || len(sibs) != 2 || sibs[0] != "fold_model_0.cif" || sibs[1] != "alt.pdb.gz" {
+		t.Fatalf("unexpected confidence siblings: %s (%v)", string(sibResp.Data), err)
+	}
+
+	// Table and SMILES endpoints serve vendored smiles-drawer.min.js
+	tableSrc := Source{Doc: func() *Document { return csvDoc }}
+	if resp := Resolve(context.Background(), tableSrc, "table/index.html"); resp.Status != http.StatusOK {
+		t.Fatalf("table index failed: %d", resp.Status)
+	}
+	if resp := Resolve(context.Background(), tableSrc, "table/vendor/smiles-drawer/smiles-drawer.min.js"); resp.Status != http.StatusOK || len(resp.Data) < 50000 {
+		t.Fatalf("table smiles-drawer failed: status=%d len=%d", resp.Status, len(resp.Data))
+	}
+	smiSrc := Source{Doc: func() *Document { return smiDoc }}
+	if resp := Resolve(context.Background(), smiSrc, "smiles/index.html"); resp.Status != http.StatusOK {
+		t.Fatalf("smiles index failed: %d", resp.Status)
+	}
+	if resp := Resolve(context.Background(), smiSrc, "smiles/vendor/smiles-drawer/smiles-drawer.min.js"); resp.Status != http.StatusOK || len(resp.Data) < 50000 {
+		t.Fatalf("smiles smiles-drawer failed: status=%d len=%d", resp.Status, len(resp.Data))
+	}
+
+	// Dynamic Mol* sibling overlay + Kabsch alignment + traversal guard
+	id := mat3{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+	refPDB := samplePDB(id, vec3{0, 0, 0})
+	mobPDB := samplePDB(rotXYZ(0.8, -0.5, 1.2), vec3{12, -8, 6})
+	refDoc, _ := Prepare("ref.pdb", refPDB, 1<<20)
+	molSrc := Source{
+		Doc: func() *Document { return refDoc },
+		ListSiblings: func(context.Context) ([]string, error) {
+			return []string{"ref.pdb", "mob.pdb", "readme.md"}, nil
+		},
+		LoadSibling: func(_ context.Context, rel string) ([]byte, error) {
+			if rel == "mob.pdb" {
+				return mobPDB, nil
+			}
+			return nil, errors.New("not found")
+		},
+	}
+	molSibResp := Resolve(context.Background(), molSrc, "molstar/siblings.json")
+	var molSibs []string
+	if err := json.Unmarshal(molSibResp.Data, &molSibs); err != nil || len(molSibs) != 1 || molSibs[0] != "mob.pdb" {
+		t.Fatalf("unexpected molstar siblings: %s (%v)", string(molSibResp.Data), err)
+	}
+	ovResp := Resolve(context.Background(), molSrc, "molstar/overlay/aligned/mob.pdb")
+	if ovResp.Status != http.StatusOK {
+		t.Fatalf("dynamic overlay failed: %d", ovResp.Status)
+	}
+	var ovPayload struct {
+		Name    string  `json:"name"`
+		Aligned bool    `json:"aligned"`
+		RMSD    float64 `json:"rmsd"`
+		Pairs   int     `json:"pairs"`
+	}
+	if err := json.Unmarshal(ovResp.Data, &ovPayload); err != nil || !ovPayload.Aligned || ovPayload.RMSD > 0.01 || ovPayload.Pairs != 6 {
+		t.Fatalf("unexpected dynamic overlay payload: %+v (%v)", ovPayload, err)
+	}
+	if bad := Resolve(context.Background(), molSrc, "molstar/overlay/aligned/../../secret.pdb"); bad.Status == http.StatusOK {
+		t.Fatalf("overlay traversal allowed: %d", bad.Status)
+	}
+
+	// Helpers
+	if !IsStructureName("af3_model.cif.gz") || IsStructureName("scores.csv") {
+		t.Fatal("IsStructureName mismatch")
+	}
+	if !IsPreviewableName("fold.cif") || !IsPreviewableName("scores.csv") || !IsPreviewableName("ligs.smi") || !IsPreviewableName("fig.png") || IsPreviewableName("main.go") {
+		t.Fatal("IsPreviewableName mismatch")
+	}
+	if !NeedsAsync("site/app.js") || !NeedsAsync("molstar/siblings.json") || !NeedsAsync("molstar/overlay/aligned/a.pdb") || !NeedsAsync("confidence/siblings.json") || NeedsAsync("molstar/index.html") {
+		t.Fatal("NeedsAsync mismatch")
 	}
 }

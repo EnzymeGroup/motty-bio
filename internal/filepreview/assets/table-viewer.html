@@ -1,0 +1,822 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Scientific Table Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: rgba(15, 23, 42, 0.12);
+  --fg: #111827;
+  --muted: #64748b;
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e24;
+  --surface-2: #242830;
+  --border: rgba(255, 255, 255, 0.11);
+  --fg: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+body { display: flex; flex-direction: column; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.group {
+  display: inline-flex;
+  background: var(--surface-2);
+  padding: 2px;
+  border-radius: 6px;
+  gap: 2px;
+}
+button, select, input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 8px;
+  outline: none;
+}
+.group button { border-color: transparent; background: transparent; }
+button { cursor: pointer; }
+button:hover { background: var(--surface-2); }
+.group button:hover { background: var(--surface); }
+button.active {
+  background: var(--accent-soft) !important;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  font-weight: 500;
+}
+input.filter {
+  width: 240px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+input:focus, select:focus { border-color: var(--accent); }
+.meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.table-wrap {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+}
+.v-spacer { position: relative; min-width: 100%; }
+table.grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  width: max-content;
+  min-width: 100%;
+}
+table.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+table.grid thead th:hover { background: var(--surface-2); }
+table.grid tbody td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 4px 10px;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  height: 26px;
+}
+table.grid tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-2) 35%, transparent);
+}
+.num { text-align: right; }
+.rownum { color: var(--muted); text-align: right; width: 46px; }
+.file-link, .smi-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.side {
+  width: 280px;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px 12px;
+  overflow: auto;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.side.open { display: flex; }
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  font-size: 11px;
+}
+.stat-box {
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.stat-k { color: var(--muted); font-size: 10px; }
+.stat-v { font-family: ui-monospace, Menlo, monospace; font-weight: 600; margin-top: 2px; }
+canvas#hist {
+  width: 100%;
+  height: 130px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.plot-pane {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  padding: 10px 12px;
+  gap: 8px;
+  overflow: hidden;
+}
+.plot-pane.open { display: flex; }
+.plot-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.plot-canvas-wrap {
+  flex: 1;
+  position: relative;
+  min-height: 200px;
+}
+canvas#plot {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.plot-tip {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  pointer-events: none;
+}
+.smi-modal {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  padding: 10px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 40;
+}
+.smi-modal.open { display: flex; }
+.smi-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.smi-svg {
+  width: 100%;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="group">
+    <button id="view-table" class="active">Table</button>
+    <button id="view-plot">Plot</button>
+  </div>
+  <input id="filter" class="filter" placeholder="Filter: text or iptm > 0.8 && rmsd < 2">
+  <button id="stats-btn">Stats</button>
+  <span id="meta" class="meta">Loading...</span>
+</header>
+<div class="body">
+  <div id="table-wrap" class="table-wrap">
+    <div id="v-spacer" class="v-spacer">
+      <table class="grid">
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="plot-pane" class="plot-pane">
+    <div class="plot-controls">
+      <label>Type <select id="plot-type"><option value="scatter">Scatter</option><option value="line">Line</option></select></label>
+      <label>X <select id="plot-x"></select></label>
+      <label>Y <select id="plot-y"></select></label>
+      <label>Color <select id="plot-c"><option value="">None</option></select></label>
+    </div>
+    <div class="plot-canvas-wrap">
+      <canvas id="plot"></canvas>
+      <div id="plot-tip" class="plot-tip">Hover a point to inspect</div>
+    </div>
+  </div>
+  <aside id="side" class="side">
+    <label>Column <select id="stat-col" style="width:100%;margin-top:4px"></select></label>
+    <div id="stat-grid" class="stat-grid"></div>
+    <canvas id="hist"></canvas>
+  </aside>
+</div>
+<div id="smi-modal" class="smi-modal">
+  <div class="smi-modal-head"><span id="smi-title">2D Structure</span><button id="smi-close">×</button></div>
+  <div id="smi-svg" class="smi-svg"></div>
+</div>
+<script src="./vendor/smiles-drawer/smiles-drawer.min.js"></script>
+<script>
+const tableWrap = document.getElementById('table-wrap');
+const vSpacer = document.getElementById('v-spacer');
+const thead = document.getElementById('thead');
+const tbody = document.getElementById('tbody');
+const filterEl = document.getElementById('filter');
+const metaEl = document.getElementById('meta');
+const statsBtn = document.getElementById('stats-btn');
+const sideEl = document.getElementById('side');
+const statColEl = document.getElementById('stat-col');
+const statGridEl = document.getElementById('stat-grid');
+const histCanvas = document.getElementById('hist');
+const viewTableBtn = document.getElementById('view-table');
+const viewPlotBtn = document.getElementById('view-plot');
+const plotPane = document.getElementById('plot-pane');
+const plotTypeEl = document.getElementById('plot-type');
+const plotXEl = document.getElementById('plot-x');
+const plotYEl = document.getElementById('plot-y');
+const plotCEl = document.getElementById('plot-c');
+const plotCanvas = document.getElementById('plot');
+const plotTip = document.getElementById('plot-tip');
+const smiModal = document.getElementById('smi-modal');
+const smiTitle = document.getElementById('smi-title');
+const smiSvgBox = document.getElementById('smi-svg');
+
+let meta = { name: 'data.csv', format: 'csv', dark: false };
+let headers = [];
+let rows = [];
+let filteredIdx = [];
+let colNumeric = [];
+let sortCol = -1;
+let sortDir = 1;
+const ROW_H = 26;
+const FILE_RE = /\.(pdb|ent|cif|mmcif|sdf|mol|mol2|xyz|gro|fasta|fa|faa|fna|a3m|sto|aln|svg|svgz|html|htm|pdf|png|jpe?g|webp|smi|smiles|csv|tsv)(\.gz)?$/i;
+const CONF_RE = /(confidence|pae|plddt|full_data|summary_).*\.json(\.gz)?$/i;
+
+function applyTheme(dark) {
+  meta.dark = Boolean(dark);
+  document.documentElement.dataset.theme = meta.dark ? 'dark' : 'light';
+  if (plotPane.classList.contains('open')) drawPlot();
+  if (sideEl.classList.contains('open')) drawStats();
+}
+
+function parseDelimited(text, sep) {
+  const out = [];
+  let row = [], cell = '', inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuote) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') inQuote = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === '') {
+      inQuote = true;
+    } else if (ch === sep) {
+      row.push(cell); cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); cell = '';
+      if (row.length > 1 || row[0] !== '') out.push(row);
+      row = [];
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell !== '' || row.length) { row.push(cell); out.push(row); }
+  if (!out.length) return { headers: [], rows: [] };
+  const hdr = out[0].map((h, i) => h.trim() || `col_${i + 1}`);
+  return { headers: hdr, rows: out.slice(1) };
+}
+
+function parseJSONL(text) {
+  const keySet = new Set();
+  const objs = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        const flat = {};
+        for (const [k, v] of Object.entries(obj)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            for (const [k2, v2] of Object.entries(v)) {
+              const fk = `${k}.${k2}`;
+              flat[fk] = v2 == null ? '' : typeof v2 === 'object' ? JSON.stringify(v2) : String(v2);
+              keySet.add(fk);
+            }
+          } else {
+            flat[k] = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+            keySet.add(k);
+          }
+        }
+        objs.push(flat);
+      }
+    } catch {}
+  }
+  const hdr = [...keySet];
+  return { headers: hdr, rows: objs.map(o => hdr.map(k => o[k] ?? '')) };
+}
+
+function detectNumericCols() {
+  colNumeric = headers.map((_, ci) => {
+    let seen = 0, num = 0;
+    for (let r = 0; r < Math.min(rows.length, 300); r++) {
+      const v = (rows[r][ci] ?? '').trim();
+      if (v === '' || v === 'NaN' || v === 'NA' || v === 'null') continue;
+      seen++;
+      if (!Number.isNaN(Number(v))) num++;
+    }
+    return seen > 0 && num / seen >= 0.85;
+  });
+}
+
+function compileFilter(expr) {
+  const q = expr.trim();
+  if (!q) return null;
+  const clauses = q.split(/\s*(?:&&|and)\s*/i).map(s => s.trim()).filter(Boolean);
+  const ops = [];
+  const colIndex = new Map(headers.map((h, i) => [h.toLowerCase(), i]));
+  for (const cl of clauses) {
+    const m = /^([A-Za-z0-9_.-]+)\s*(>=|<=|!=|==|=|>|<|~)\s*(.+)$/.exec(cl);
+    if (m && colIndex.has(m[1].toLowerCase())) {
+      const ci = colIndex.get(m[1].toLowerCase());
+      const op = m[2];
+      const rawVal = m[3].trim().replace(/^["']|["']$/g, '');
+      const numVal = Number(rawVal);
+      ops.push({ ci, op, rawVal: rawVal.toLowerCase(), numVal, isNum: rawVal !== '' && !Number.isNaN(numVal) });
+    } else {
+      ops.push({ ci: -1, sub: cl.toLowerCase() });
+    }
+  }
+  return (row) => {
+    for (const o of ops) {
+      if (o.ci < 0) {
+        if (!row.some(cell => (cell ?? '').toLowerCase().includes(o.sub))) return false;
+      } else {
+        const cell = (row[o.ci] ?? '').trim();
+        if (o.op === '~') {
+          if (!cell.toLowerCase().includes(o.rawVal)) return false;
+        } else if (o.isNum && !Number.isNaN(Number(cell)) && cell !== '') {
+          const v = Number(cell);
+          if (o.op === '>' && !(v > o.numVal)) return false;
+          if (o.op === '>=' && !(v >= o.numVal)) return false;
+          if (o.op === '<' && !(v < o.numVal)) return false;
+          if (o.op === '<=' && !(v <= o.numVal)) return false;
+          if ((o.op === '=' || o.op === '==') && !(v === o.numVal)) return false;
+          if (o.op === '!=' && !(v !== o.numVal)) return false;
+        } else {
+          const lv = cell.toLowerCase();
+          if ((o.op === '=' || o.op === '==') && lv !== o.rawVal) return false;
+          if (o.op === '!=' && lv === o.rawVal) return false;
+          if (o.op === '>' || o.op === '>=' || o.op === '<' || o.op === '<=') return false;
+        }
+      }
+    }
+    return true;
+  };
+}
+
+function applyFilterAndSort() {
+  const pred = compileFilter(filterEl.value);
+  filteredIdx = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (!pred || pred(rows[i])) filteredIdx.push(i);
+  }
+  if (sortCol >= 0) {
+    const isNum = colNumeric[sortCol];
+    filteredIdx.sort((a, b) => {
+      const av = (rows[a][sortCol] ?? '').trim();
+      const bv = (rows[b][sortCol] ?? '').trim();
+      if (av === '' && bv === '') return 0;
+      if (av === '') return 1;
+      if (bv === '') return -1;
+      if (isNum) {
+        const na = Number(av), nb = Number(bv);
+        if (Number.isNaN(na) && Number.isNaN(nb)) return 0;
+        if (Number.isNaN(na)) return 1;
+        if (Number.isNaN(nb)) return -1;
+        return (na - nb) * sortDir;
+      }
+      return av.localeCompare(bv) * sortDir;
+    });
+  }
+  metaEl.textContent = `${filteredIdx.length.toLocaleString()} / ${rows.length.toLocaleString()} rows · ${headers.length} cols`;
+  renderTableHead();
+  renderVisibleRows();
+  if (sideEl.classList.contains('open')) drawStats();
+  if (plotPane.classList.contains('open')) drawPlot();
+}
+
+function renderTableHead() {
+  const tr = document.createElement('tr');
+  const numTh = document.createElement('th');
+  numTh.className = 'rownum';
+  numTh.textContent = '#';
+  tr.appendChild(numTh);
+  headers.forEach((h, i) => {
+    const th = document.createElement('th');
+    if (colNumeric[i]) th.className = 'num';
+    const arrow = sortCol === i ? (sortDir > 0 ? ' ▲' : ' ▼') : '';
+    th.textContent = h + arrow;
+    th.onclick = () => {
+      if (sortCol === i) sortDir = -sortDir;
+      else { sortCol = i; sortDir = colNumeric[i] ? -1 : 1; }
+      applyFilterAndSort();
+    };
+    tr.appendChild(th);
+  });
+  thead.replaceChildren(tr);
+}
+
+function isSmilesCol(colIdx) {
+  const name = (headers[colIdx] || '').toLowerCase();
+  return name === 'smiles' || name === 'smi' || name === 'canonical_smiles' || name.endsWith('_smiles');
+}
+
+function renderVisibleRows() {
+  const total = filteredIdx.length;
+  const viewH = tableWrap.clientHeight || 500;
+  const scrollTop = tableWrap.scrollTop;
+  const start = Math.max(0, Math.floor(scrollTop / ROW_H) - 8);
+  const count = Math.ceil(viewH / ROW_H) + 18;
+  const end = Math.min(total, start + count);
+
+  const frag = document.createDocumentFragment();
+  if (start > 0) {
+    const padTop = document.createElement('tr');
+    padTop.style.height = `${start * ROW_H}px`;
+    frag.appendChild(padTop);
+  }
+  for (let vi = start; vi < end; vi++) {
+    const rIdx = filteredIdx[vi];
+    const row = rows[rIdx];
+    const tr = document.createElement('tr');
+    const numTd = document.createElement('td');
+    numTd.className = 'rownum';
+    numTd.textContent = String(rIdx + 1);
+    tr.appendChild(numTd);
+    for (let ci = 0; ci < headers.length; ci++) {
+      const td = document.createElement('td');
+      const val = row[ci] ?? '';
+      if (colNumeric[ci]) td.className = 'num';
+      const trimmed = val.trim();
+      if (window.viva?.postMessage && trimmed && !trimmed.includes('\n') && (FILE_RE.test(trimmed) || CONF_RE.test(trimmed))) {
+        const a = document.createElement('span');
+        a.className = 'file-link';
+        a.textContent = trimmed;
+        a.title = `Open ${trimmed} in Motty`;
+        a.onclick = () => window.viva.postMessage(JSON.stringify({ type: 'open-sibling', path: trimmed }));
+        td.appendChild(a);
+      } else if (isSmilesCol(ci) && trimmed.length >= 2 && trimmed.length <= 240) {
+        const a = document.createElement('span');
+        a.className = 'smi-link';
+        a.textContent = trimmed;
+        a.title = 'Click to view 2D structure';
+        a.onclick = () => showSmilesModal(trimmed, row[0] || trimmed);
+        td.appendChild(a);
+      } else {
+        td.textContent = val;
+        if (val.length > 36) td.title = val;
+      }
+      tr.appendChild(td);
+    }
+    frag.appendChild(tr);
+  }
+  const remain = total - end;
+  if (remain > 0) {
+    const padBot = document.createElement('tr');
+    padBot.style.height = `${remain * ROW_H}px`;
+    frag.appendChild(padBot);
+  }
+  tbody.replaceChildren(frag);
+}
+
+function showSmilesModal(smiles, label) {
+  smiTitle.textContent = String(label).slice(0, 32);
+  smiSvgBox.replaceChildren();
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '256');
+  svg.setAttribute('height', '176');
+  smiSvgBox.appendChild(svg);
+  smiModal.classList.add('open');
+  try {
+    const drawer = new window.SmiDrawer({ width: 256, height: 176, bondThickness: 1.4 });
+    drawer.draw(smiles, svg, meta.dark ? 'dark' : 'light');
+  } catch (e) {
+    smiSvgBox.textContent = 'Invalid SMILES';
+  }
+}
+document.getElementById('smi-close').onclick = () => smiModal.classList.remove('open');
+
+function populateSelectors() {
+  const numCols = headers.map((h, i) => ({ h, i })).filter(x => colNumeric[x.i]);
+  statColEl.replaceChildren(...headers.map((h, i) => new Option(h, String(i))));
+  if (numCols.length) statColEl.value = String(numCols[0].i);
+
+  plotXEl.replaceChildren(new Option('(Row index)', '-1'), ...numCols.map(c => new Option(c.h, String(c.i))));
+  plotYEl.replaceChildren(...numCols.map(c => new Option(c.h, String(c.i))));
+  plotCEl.replaceChildren(new Option('None', '-1'), ...numCols.map(c => new Option(c.h, String(c.i))));
+  if (numCols.length >= 2) {
+    plotXEl.value = String(numCols[0].i);
+    plotYEl.value = String(numCols[1].i);
+  } else if (numCols.length === 1) {
+    plotXEl.value = '-1';
+    plotYEl.value = String(numCols[0].i);
+  }
+}
+
+function drawStats() {
+  const ci = Number(statColEl.value);
+  if (Number.isNaN(ci) || ci < 0) return;
+  const nums = [];
+  let missing = 0;
+  const uniq = new Set();
+  for (const rIdx of filteredIdx) {
+    const v = (rows[rIdx][ci] ?? '').trim();
+    if (!v || v === 'NaN' || v === 'NA' || v === 'null') { missing++; continue; }
+    uniq.add(v);
+    const n = Number(v);
+    if (Number.isFinite(n)) nums.push(n);
+  }
+  statGridEl.replaceChildren();
+  const add = (k, v) => {
+    const box = document.createElement('div');
+    box.className = 'stat-box';
+    box.innerHTML = `<div class="stat-k">${k}</div><div class="stat-v"></div>`;
+    box.querySelector('.stat-v').textContent = v;
+    statGridEl.appendChild(box);
+  };
+  add('Rows', String(filteredIdx.length));
+  add('Missing', String(missing));
+  if (nums.length >= 2) {
+    nums.sort((a, b) => a - b);
+    const n = nums.length;
+    const mean = nums.reduce((a, b) => a + b, 0) / n;
+    const std = Math.sqrt(nums.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
+    const q = (p) => nums[Math.min(n - 1, Math.floor(p * (n - 1)))];
+    add('Min', nums[0].toPrecision(4));
+    add('Max', nums[n - 1].toPrecision(4));
+    add('Mean', mean.toPrecision(4));
+    add('Median', q(0.5).toPrecision(4));
+    add('Std', std.toPrecision(4));
+    add('P25 / P75', `${q(0.25).toPrecision(3)} / ${q(0.75).toPrecision(3)}`);
+    drawHistogram(nums);
+  } else {
+    add('Unique', String(uniq.size));
+    const ctx = histCanvas.getContext('2d');
+    ctx.clearRect(0, 0, histCanvas.width, histCanvas.height);
+  }
+}
+
+function drawHistogram(sorted) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = histCanvas.clientWidth || 250, h = 130;
+  histCanvas.width = Math.round(w * dpr);
+  histCanvas.height = Math.round(h * dpr);
+  const ctx = histCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const dark = meta.dark;
+  ctx.fillStyle = dark ? '#14161a' : '#f8fafc';
+  ctx.fillRect(0, 0, w, h);
+
+  const bins = 24;
+  const lo = sorted[0], hi = sorted[sorted.length - 1];
+  const span = hi - lo || 1;
+  const counts = new Int32Array(bins);
+  for (const v of sorted) {
+    const b = Math.min(bins - 1, Math.floor(((v - lo) / span) * bins));
+    counts[b]++;
+  }
+  const maxC = Math.max(...counts, 1);
+  const bw = (w - 16) / bins;
+  ctx.fillStyle = dark ? '#818cf8' : '#4f46e5';
+  for (let i = 0; i < bins; i++) {
+    const bh = (counts[i] / maxC) * (h - 24);
+    ctx.fillRect(8 + i * bw + 1, h - 14 - bh, Math.max(2, bw - 2), bh);
+  }
+}
+
+function drawPlot() {
+  const xi = Number(plotXEl.value);
+  const yi = Number(plotYEl.value);
+  const ci = Number(plotCEl.value);
+  const dpr = window.devicePixelRatio || 1;
+  const w = plotCanvas.clientWidth || 600, h = plotCanvas.clientHeight || 360;
+  plotCanvas.width = Math.round(w * dpr);
+  plotCanvas.height = Math.round(h * dpr);
+  const ctx = plotCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const dark = meta.dark;
+  ctx.fillStyle = dark ? '#14161a' : '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  if (Number.isNaN(yi) || yi < 0) return;
+
+  const pts = [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minC = Infinity, maxC = -Infinity;
+  for (let k = 0; k < filteredIdx.length && pts.length < 15000; k++) {
+    const rIdx = filteredIdx[k];
+    const row = rows[rIdx];
+    const x = xi < 0 ? rIdx + 1 : Number(row[xi]);
+    const y = Number(row[yi]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const c = ci >= 0 ? Number(row[ci]) : NaN;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (Number.isFinite(c)) { if (c < minC) minC = c; if (c > maxC) maxC = c; }
+    pts.push({ x, y, c, rIdx });
+  }
+  if (!pts.length) return;
+  const padL = 56, padR = 20, padT = 20, padB = 36;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  const sx = (v) => padL + ((v - minX) / (maxX - minX || 1)) * pw;
+  const sy = (v) => padT + (1 - (v - minY) / (maxY - minY || 1)) * ph;
+
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.12)';
+  ctx.fillStyle = dark ? '#94a3b8' : '#64748b';
+  ctx.font = '10px ui-monospace, Menlo, monospace';
+  for (let i = 0; i <= 4; i++) {
+    const frac = i / 4;
+    const y = padT + frac * ph;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ctx.fillText((maxY - frac * (maxY - minY)).toPrecision(3), padL - 6, y);
+    const x = padL + frac * pw;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText((minX + frac * (maxX - minX)).toPrecision(3), x, h - padB + 6);
+  }
+
+  const colorFor = (c) => {
+    if (!Number.isFinite(c) || maxC <= minC) return dark ? '#818cf8' : '#4f46e5';
+    const t = Math.max(0, Math.min(1, (c - minC) / (maxC - minC)));
+    return `hsl(${Math.round((1 - t) * 230)}, 80%, ${dark ? 62 : 48}%)`;
+  };
+
+  if (plotTypeEl.value === 'line') {
+    ctx.strokeStyle = dark ? '#818cf8' : '#4f46e5';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    pts.forEach((p, idx) => {
+      const px = sx(p.x), py = sy(p.y);
+      if (idx === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  } else {
+    for (const p of pts) {
+      ctx.fillStyle = colorFor(p.c);
+      ctx.beginPath();
+      ctx.arc(sx(p.x), sy(p.y), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  plotCanvas.onmousemove = (e) => {
+    const rect = plotCanvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    let best = null, bestD = 18 * 18;
+    for (const p of pts) {
+      const dx = sx(p.x) - mx, dy = sy(p.y) - my;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return;
+    const xName = xi < 0 ? 'row' : headers[xi];
+    const yName = headers[yi];
+    const idCol = rows[best.rIdx][0] ? `${rows[best.rIdx][0]} · ` : `Row ${best.rIdx + 1} · `;
+    plotTip.textContent = `${idCol}${xName}=${best.x} · ${yName}=${best.y}`;
+  };
+}
+
+tableWrap.addEventListener('scroll', renderVisibleRows, { passive: true });
+window.addEventListener('resize', () => {
+  renderVisibleRows();
+  if (plotPane.classList.contains('open')) drawPlot();
+});
+filterEl.oninput = applyFilterAndSort;
+statColEl.onchange = drawStats;
+statsBtn.onclick = () => {
+  const open = sideEl.classList.toggle('open');
+  statsBtn.classList.toggle('active', open);
+  if (open) drawStats();
+};
+viewTableBtn.onclick = () => {
+  viewTableBtn.classList.add('active');
+  viewPlotBtn.classList.remove('active');
+  tableWrap.style.display = '';
+  plotPane.classList.remove('open');
+};
+viewPlotBtn.onclick = () => {
+  viewPlotBtn.classList.add('active');
+  viewTableBtn.classList.remove('active');
+  tableWrap.style.display = 'none';
+  plotPane.classList.add('open');
+  requestAnimationFrame(drawPlot);
+};
+plotTypeEl.onchange = drawPlot;
+plotXEl.onchange = drawPlot;
+plotYEl.onchange = drawPlot;
+plotCEl.onchange = drawPlot;
+
+if (window.viva) {
+  window.viva.onmessage = (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'theme') applyTheme(msg.dark);
+    } catch {}
+  };
+}
+
+async function boot() {
+  try {
+    const [metaRes, payloadRes] = await Promise.all([fetch('./meta.json'), fetch('./payload')]);
+    if (!metaRes.ok || !payloadRes.ok) throw new Error('Could not load table');
+    meta = { ...meta, ...(await metaRes.json()) };
+    applyTheme(meta.dark);
+    document.title = `${meta.name} — Table`;
+    const text = await payloadRes.text();
+    const parsed = meta.format === 'jsonl'
+      ? parseJSONL(text)
+      : parseDelimited(text, meta.format === 'tsv' ? '\t' : ',');
+    headers = parsed.headers;
+    rows = parsed.rows;
+    detectNumericCols();
+    populateSelectors();
+    applyFilterAndSort();
+  } catch (err) {
+    metaEl.textContent = String(err?.message || err);
+  }
+}
+boot();
+</script>
+</body>
+</html>

@@ -843,6 +843,10 @@ async function executeCore(message) {
 		styledComponents = [];
 		styledRepresentations = [];
 		baseStyle = { mode, palette };
+		if (typeof message.color === "string" && /^#[0-9a-f]{6}$/i.test(message.color)) {
+			palette = "uniform";
+			baseStyle = { mode, palette: "uniform", color: message.color };
+		}
 		const data = await plugin.builders.data.rawData({
 			data: message.content,
 			label: "Reference structure",
@@ -976,12 +980,17 @@ async function executeCore(message) {
 			if (
 				!localStyles.size &&
 				baseStyle.mode === mode &&
-				baseStyle.palette === palette
+				baseStyle.palette === palette &&
+				baseStyle.color === message.color
 			) {
 				reportSelection();
 				return;
 			}
 			baseStyle = { mode, palette };
+		if (typeof message.color === "string" && /^#[0-9a-f]{6}$/i.test(message.color)) {
+			palette = "uniform";
+			baseStyle = { mode, palette: "uniform", color: message.color };
+		}
 			localStyles.clear();
 		}
 		await applyStyle();
@@ -1043,6 +1052,18 @@ async function executeCore(message) {
 		plugin.state.data.updateCellState(water.ref, {
 			isHidden: !message.visible,
 		});
+	} else if (
+		message.type === "asset-visibility" &&
+		typeof message.assetId === "string" &&
+		typeof message.visible === "boolean"
+	) {
+		const targetAsset = message.assetId === assetId ? { styledRepresentations, water } : loadedAssets.get(message.assetId);
+		if (targetAsset) {
+			for (const rep of targetAsset.styledRepresentations || [])
+				plugin.state.data.updateCellState(rep.ref, { isHidden: !message.visible });
+			if (targetAsset.water)
+				plugin.state.data.updateCellState(targetAsset.water.ref, { isHidden: !message.visible || !waterVisible });
+		}
 	} else if (message.type === "presentation" && validPresentation(message.presentation)) {
 		presentation = { ...message.presentation };
 		applyPresentation();

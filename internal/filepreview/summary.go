@@ -23,6 +23,12 @@ func Summarize(desc Descriptor, data []byte) string {
 		return fmt.Sprintf("%s · %s", desc.Label, humanBytes(len(data)))
 	case KindPDF:
 		return summarizePDF(desc, data)
+	case KindConfidence:
+		return summarizeConfidence(desc.Label, data)
+	case KindTable:
+		return summarizeTable(desc, data)
+	case KindSMILES:
+		return summarizeSMILES(desc.Label, data)
 	default:
 		return desc.Label
 	}
@@ -401,6 +407,104 @@ func summarizePDF(desc Descriptor, data []byte) string {
 		return fmt.Sprintf("%s · %s · %s", desc.Label, plural(pages, "page", "pages"), humanBytes(len(data)))
 	}
 	return fmt.Sprintf("%s · %s", desc.Label, humanBytes(len(data)))
+}
+
+var (
+	jsonScalarNumRe = regexp.MustCompile(`"(ranking_score|iptm|ptm|confidence_score|complex_plddt)"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)`)
+)
+
+func summarizeConfidence(label string, data []byte) string {
+	parts := []string{label}
+	found := map[string]string{}
+	scan := func(chunk []byte) {
+		for _, m := range jsonScalarNumRe.FindAllSubmatch(chunk, 16) {
+			k := string(m[1])
+			if _, ok := found[k]; !ok {
+				if v, err := strconv.ParseFloat(string(m[2]), 64); err == nil {
+					found[k] = fmt.Sprintf("%.2f", v)
+				}
+			}
+		}
+	}
+	if len(data) <= 128<<10 {
+		scan(data)
+	} else {
+		scan(data[:64<<10])
+		scan(data[len(data)-64<<10:])
+	}
+	for _, item := range [][2]string{
+		{"ranking_score", "score"},
+		{"confidence_score", "conf"},
+		{"iptm", "ipTM"},
+		{"ptm", "pTM"},
+		{"complex_plddt", "pLDDT"},
+	} {
+		if val, ok := found[item[0]]; ok {
+			parts = append(parts, item[1]+" "+val)
+		}
+	}
+	parts = append(parts, humanBytes(len(data)))
+	return strings.Join(parts, " · ")
+}
+
+func summarizeTable(desc Descriptor, data []byte) string {
+	lines := bytes.Count(data, []byte{'\n'})
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		lines++
+	}
+	if desc.Format == "jsonl" {
+		return fmt.Sprintf("%s · %s · %s", desc.Label, plural(lines, "record", "records"), humanBytes(len(data)))
+	}
+	cols := 0
+	if idx := bytes.IndexByte(data, '\n'); idx > 0 {
+		header := string(bytes.TrimRight(data[:idx], "\r"))
+		sep := ','
+		if desc.Format == "tsv" {
+			sep = '\t'
+		}
+		cols = countCSVFields(header, sep)
+	}
+	rows := max(lines-1, 0)
+	if cols > 0 {
+		return fmt.Sprintf("%s · %s × %s", desc.Label, plural(rows, "row", "rows"), plural(cols, "col", "cols"))
+	}
+	return fmt.Sprintf("%s · %s", desc.Label, humanBytes(len(data)))
+}
+
+func countCSVFields(line string, sep rune) int {
+	if line == "" {
+		return 0
+	}
+	count := 1
+	inQuote := false
+	for _, r := range line {
+		if r == '"' {
+			inQuote = !inQuote
+		} else if r == sep && !inQuote {
+			count++
+		}
+	}
+	return count
+}
+
+func summarizeSMILES(label string, data []byte) string {
+	count := 0
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if count == 0 && strings.HasPrefix(strings.ToLower(line), "smiles") {
+			continue
+		}
+		count++
+	}
+	if count > 0 {
+		return fmt.Sprintf("%s · %s", label, plural(count, "molecule", "molecules"))
+	}
+	return fmt.Sprintf("%s · %s", label, humanBytes(len(data)))
 }
 
 func plural(n int, singular, many string) string {
