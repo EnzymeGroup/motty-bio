@@ -650,12 +650,12 @@ func TestSFTPWindowPreviewAndAsyncLocalPathUseWindowContext(t *testing.T) {
 		t.Fatal("preview did not bind the transfer window's source")
 	}
 	document.window.Close()
-	unsupported := filepath.Join(dir, "unsupported.pdf")
-	os.WriteFile(unsupported, []byte("%PDF-1.7"), 0600)
+	unsupported := filepath.Join(dir, "unsupported.bin")
+	os.WriteFile(unsupported, []byte{0x7f, 'E', 'L', 'F', 0, 0}, 0600)
 	w.navigate(true, dir)
 	view.Rest()
 	for index, row := range w.view.lfolder.rows {
-		if row.entry.Name == "unsupported.pdf" {
+		if row.entry.Name == "unsupported.bin" {
 			w.openEntry(true, index)
 		}
 	}

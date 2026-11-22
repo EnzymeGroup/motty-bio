@@ -174,6 +174,7 @@ func (m *fileWindowManager) forgetDocument(d *fileDocument) {
 			m.window = nil
 			m.windowEpoch = 0
 			m.page = nil
+			m.resetWebHost()
 			window.Close()
 			return
 		}
@@ -281,6 +282,7 @@ func (m *fileWindowManager) onWindowClosed(epoch uint64) {
 	m.window = nil
 	m.windowEpoch = 0
 	m.page = nil
+	m.resetWebHost()
 	m.active = ""
 	m.pending = ""
 	m.order = nil
@@ -308,6 +310,7 @@ func (m *fileWindowManager) forceClose() {
 	m.window = nil
 	m.windowEpoch = 0
 	m.page = nil
+	m.resetWebHost()
 	m.active = ""
 	m.pending = ""
 	m.order = nil
@@ -370,6 +373,7 @@ func (m *fileWindowManager) configWithClosed(onClosed func()) app.Config {
 		OnScroll:       m.scroll,
 		OnCloseRequest: m.requestClose,
 		OnClosed:       onClosed,
+		Web:            m.ensureWebHost(),
 	}
 	base.WindowBorderColor = func() app.Color { return windowClearColor(m.ownerTheme()) }
 	config := ui.Configure(m.editPage(m.pageTheme()), base)

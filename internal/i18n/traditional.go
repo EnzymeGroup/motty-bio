@@ -60,6 +60,8 @@ var TraditionalMessages = Messages{
 		SaveDirect:            "直接儲存",
 		SaveConfirmFinalTitle: "確認儲存？", SaveConfirmFinalDescription: "伺服器檔案將被右側所示的本機編輯版本取代。",
 		CloseTabFmt: "關閉 %s", TabsScrollbar: "檔案分頁",
+		Preview: "預覽", Source: "原始碼", OpenBrowser: "瀏覽器開啟", OpenExternal: "外部應用程式",
+		PreviewLoading: "正在載入預覽…", PreviewUnavailable: "內建預覽不可用，可在瀏覽器中開啟或切換到原始碼檢視。", SnapshotSavedFmt: "截圖已儲存到 %s",
 	},
 
 	TerminalInput: TerminalInputMessages{

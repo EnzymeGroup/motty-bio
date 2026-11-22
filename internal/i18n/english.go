@@ -60,6 +60,8 @@ var EnglishMessages = Messages{
 		SaveDirect:            "Save directly",
 		SaveConfirmFinalTitle: "Save these changes?", SaveConfirmFinalDescription: "The server file will be replaced with the local edits shown in the right pane.",
 		CloseTabFmt: "Close %s", TabsScrollbar: "File tabs",
+		Preview: "Preview", Source: "Source", OpenBrowser: "Browser", OpenExternal: "External app",
+		PreviewLoading: "Loading preview…", PreviewUnavailable: "Embedded preview is unavailable; open in browser or switch to source.", SnapshotSavedFmt: "Saved snapshot to %s",
 	},
 
 	TerminalInput: TerminalInputMessages{

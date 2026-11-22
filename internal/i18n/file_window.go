@@ -15,4 +15,6 @@ type FileWindowMessages struct {
 	SaveConfirmTitle, SaveConfirmDescription, SaveDirect                       string
 	SaveConfirmFinalTitle, SaveConfirmFinalDescription                         string
 	CloseTabFmt, TabsScrollbar                                                 string
+	Preview, Source, OpenBrowser, OpenExternal                                 string
+	PreviewLoading, PreviewUnavailable, SnapshotSavedFmt                       string
 }

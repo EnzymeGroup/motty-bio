@@ -17,6 +17,7 @@ import (
 	"github.com/vivaui/viva/text"
 	"github.com/vivaui/viva/ui"
 	"motty/internal/filecontent"
+	"motty/internal/filepreview"
 	"motty/internal/sftpclient"
 )
 
@@ -36,15 +37,19 @@ type fileWindowManager struct {
 	tabStrip tabStrip
 	tabs     fileWindowTabUI
 	// page is the window's page, made on the first paint.
-	page       *ui.Page // UI thread only
-	closingAll bool     // UI thread only
-	closeQueue []string // UI thread only
-	closeDone  func()   // UI thread only
+	page          *ui.Page // UI thread only
+	closingAll    bool     // UI thread only
+	closeQueue    []string
+	closeDone     func() // UI thread only
+	web           *app.WebHost
+	webReady      bool
+	previewServer *filepreview.LoopbackServer
 }
 type fileDocumentEvent struct {
 	document                     *fileDocument
 	data                         []byte
 	image                        *filecontent.Image
+	preview                      *filepreview.Document
 	decoded                      filecontent.Text
 	diff                         components.CodeDiffResult
 	diffRight                    string
@@ -92,6 +97,7 @@ type fileDocument struct {
 	edit                             documentEditing
 	original, pending                string
 	image                            *filecontent.Image
+	preview                          *filePreviewState
 	// previewMB is the preview size this document was opened under. It is
 	// captured when the file opens, so a later settings change does not resize
 	// an open document.
@@ -209,6 +215,9 @@ func (state *State) forgetSFTPDocumentAccess(view *sftpView) {
 	for _, document := range state.fileWindows.documents {
 		if document.view == view && !document.local && !document.closed && document.worker != nil {
 			document.worker.Close()
+			if document.preview != nil {
+				document.preview.remoteOpener = nil
+			}
 			message := state.messages.SFTPUnavailable
 			document.openRemoteWorker(func() (sftpclient.Remote, error) { return nil, errors.New(message) })
 		}
@@ -218,6 +227,23 @@ func (state *State) forgetSFTPDocumentAccess(view *sftpView) {
 func decodeFileEvent(document *fileDocument, data []byte, err error) fileDocumentEvent {
 	event := fileDocumentEvent{document: document, data: data, err: err}
 	if err != nil {
+		return event
+	}
+	if preview, previewErr := filepreview.Prepare(document.name, data, document.previewLimitBytes()); previewErr != nil {
+		event.err = previewErr
+		return event
+	} else if preview != nil {
+		event.preview = preview
+		if !preview.Descriptor.TextEditable {
+			return event
+		}
+		decoded, textErr := filecontent.Decode(data, "", document.previewLimitBytes())
+		if textErr != nil && !errors.Is(textErr, filecontent.ErrChooseEncoding) {
+			// Still allow read-only rich preview even if text decoding fails.
+			preview.Descriptor.TextEditable = false
+			return event
+		}
+		event.decoded, event.err = decoded, textErr
 		return event
 	}
 	event.image, event.err = filecontent.DecodeImage(data, document.name)
@@ -256,7 +282,7 @@ func (state *State) pumpFileWindows() {
 		}
 		// Reload keeps an explicitly selected BOM-less encoding. A server-side
 		// BOM is authoritative; undecodable replacement bytes require a new choice.
-		if d.window != nil && d.image == nil && event.image == nil && d.format.Encoding != "" && !event.decoded.Format.BOM && (event.err == nil || errors.Is(event.err, filecontent.ErrChooseEncoding)) {
+		if d.window != nil && d.image == nil && event.image == nil && !d.isReadOnlyPreview() && (event.preview == nil || event.preview.Descriptor.TextEditable) && d.format.Encoding != "" && !event.decoded.Format.BOM && (event.err == nil || errors.Is(event.err, filecontent.ErrChooseEncoding)) {
 			event.decoded, event.err = filecontent.Decode(event.data, d.format.Encoding, d.previewLimitBytes())
 			if errors.Is(event.err, filecontent.ErrEncoding) {
 				event.err = filecontent.ErrChooseEncoding
@@ -285,6 +311,11 @@ func (state *State) pumpFileWindows() {
 			continue
 		}
 		d.raw, d.revision, d.image = event.data, sftpclient.Revision(sha256.Sum256(event.data)), event.image
+		var opener func() (sftpclient.Remote, error)
+		if !d.local && d.view != nil {
+			opener = d.view.openFiles
+		}
+		d.setPreview(event.preview, opener)
 		d.setText(event.decoded, event.err)
 		if !m.hasTab(d) {
 			if err := m.present(d); err != nil {
@@ -321,7 +352,7 @@ func (d *fileDocument) previewLimitBytes() int {
 func (d *fileDocument) fileProblem(err error) string {
 	m := d.owner.messages.FileWindow
 	switch {
-	case errors.Is(err, sftpclient.ErrPreviewFileTooLarge), errors.Is(err, filecontent.ErrTooLarge):
+	case errors.Is(err, sftpclient.ErrPreviewFileTooLarge), errors.Is(err, filecontent.ErrTooLarge), errors.Is(err, filepreview.ErrDecompressedTooLarge):
 		return previewLimitMessage(d.owner.messages, d.previewLimitMB())
 	case errors.Is(err, filecontent.ErrImageTooLarge):
 		return m.ImageTooLarge
@@ -359,11 +390,11 @@ func (d *fileDocument) setText(decoded filecontent.Text, err error) {
 }
 
 func (d *fileDocument) dirty() bool {
-	return d.note == nil && d.image == nil && d.ready && d.editor.String() != d.original
+	return d.note == nil && !d.isNonTextDocument() && d.ready && d.editor.String() != d.original
 }
 
 func (d *fileDocument) requestSave(closeAfter bool) {
-	if d.note != nil || d.busy || !d.ready || d.image != nil {
+	if d.note != nil || d.busy || !d.ready || d.isNonTextDocument() {
 		return
 	}
 	d.ui.saveMenuOpen = false
@@ -394,7 +425,7 @@ func (d *fileDocument) requestSave(closeAfter bool) {
 }
 
 func (d *fileDocument) saveDirect(closeAfter bool) {
-	if d.busy || !d.ready || d.image != nil {
+	if d.busy || !d.ready || d.isNonTextDocument() {
 		return
 	}
 	if d.comparison.active {
@@ -497,6 +528,9 @@ func (d *fileDocument) apply(event fileDocumentEvent) {
 		return
 	}
 	d.format, d.original = decoded.Format, d.pending
+	if d.hasPreview() && d.preview.doc.Descriptor.TextEditable {
+		d.preview.doc.UpdateText(d.original)
+	}
 	d.status = d.owner.messages.FileWindow.Saved
 	d.problem = ""
 	d.notices.show(d.name, d.status, components.ToastSuccess)
@@ -613,6 +647,7 @@ func (d *fileDocument) dispose() {
 	}
 
 	d.closeCanceled = nil
+	d.disposePreview()
 	d.stopComparison()
 	if d.worker != nil {
 		d.worker.Close()
@@ -641,7 +676,7 @@ func (d *fileDocument) beginComparison() {
 		}
 		return
 	}
-	if d.busy || !d.ready || d.image != nil || d.local {
+	if d.busy || !d.ready || d.isNonTextDocument() || d.local {
 		return
 	}
 	if !fileDiffWithinLimit(d.editor.String()) {
@@ -1011,6 +1046,7 @@ func (state *State) closeFileWindows() {
 	m.closed = true
 	m.events = nil
 	m.mu.Unlock()
+	m.closePreviewServer()
 	m.forceClose()
 }
 

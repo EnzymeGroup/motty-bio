@@ -114,6 +114,8 @@ func (d *fileDocument) paint(canvas *gfx.Canvas, size gfx.Size) {
 		d.ui.imageGeometry = components.PaintImageView(canvas, theme, d.ui.contentBox.Rect(), components.ImageViewOptions{
 			Bitmap: gfx.Bitmap{Pix: d.image.Pix, Width: d.image.Width, Height: d.image.Height, Stride: d.image.Width * 4, ID: binary.LittleEndian.Uint64(d.revision[:8]), Version: 1}, Zoom: d.ui.zoom, Pan: d.ui.pan,
 		})
+	} else if d.showingPreview() {
+		d.paintPreview(canvas, theme, d.ui.contentBox.Rect())
 	} else {
 		d.ui.editorBounds = d.ui.contentBox.Rect()
 		d.paintCodeEditor(canvas, theme, d.ui.contentBox.Rect())
@@ -152,7 +154,8 @@ func (d *fileDocument) declareEditWindow(c ui.C) {
 			}
 			d.ui.contentBox = ui.Slot(c).Grow(1).MinHeight(64)
 			ui.Row(c).Height(32).Gap(8).Items(ui.Center).Children(func() {
-				if d.image == nil {
+				showEditorControls := d.image == nil && !d.showingPreview() && !d.isReadOnlyPreview()
+				if showEditorControls {
 					d.declareEncoding(c, bounds)
 				}
 				d.declareFooterProgress(c)
@@ -165,7 +168,18 @@ func (d *fileDocument) declareEditWindow(c ui.C) {
 					d.pageButton(c, "zoom-out", hitDocumentZoomOut, "−").Small().Outline()
 					d.pageButton(c, "zoom-in", hitDocumentZoomIn, "+").Small().Outline()
 				}
-				if d.image == nil && d.ready {
+				if d.hasPreview() {
+					if d.preview.doc.Descriptor.TextEditable {
+						toggleLabel := m.Source
+						if d.preview.sourceMode {
+							toggleLabel = m.Preview
+						}
+						d.pageButton(c, "toggle-preview", hitDocumentTogglePreview, toggleLabel).Small().Outline()
+					}
+					d.pageButton(c, "open-browser", hitDocumentOpenBrowser, m.OpenBrowser).Small().Outline()
+					d.pageButton(c, "open-external", hitDocumentOpenExternal, m.OpenExternal).Small().Outline()
+				}
+				if showEditorControls && d.ready {
 					wrap := d.owner.messages.CodeEditor.WrapOn
 					if d.edit.noWrap {
 						wrap = d.owner.messages.CodeEditor.WrapOff
@@ -173,7 +187,7 @@ func (d *fileDocument) declareEditWindow(c ui.C) {
 					d.pageButton(c, "wrap", hitDocumentWrap, wrap).Small().Outline()
 				}
 				d.pageButton(c, "reload", hitDocumentReload, m.Reload).Small().Outline().Disabled(d.busy || d.comparison.active)
-				if d.image == nil {
+				if showEditorControls {
 					disabled := d.busy || !d.ready || !d.dirty() || d.comparison.active
 					if d.local {
 						d.pageButton(c, "save", hitDocumentSave, m.Save).Small().Disabled(disabled)
@@ -403,6 +417,15 @@ func (d *fileDocument) footerStatus() string {
 	if d.image != nil {
 		return fmt.Sprintf("%s · %d × %d · %s", strings.ToUpper(d.image.Format), d.image.Width, d.image.Height, m.ReadOnly)
 	}
+	if d.showingPreview() {
+		if d.busy {
+			return d.status
+		}
+		if d.dirty() {
+			return d.preview.doc.Summary + " · " + m.Dirty
+		}
+		return d.preview.doc.Summary
+	}
 	status := d.status
 	if status == m.Ready {
 		status = ""
@@ -582,6 +605,12 @@ func (d *fileDocument) click(id gfx.ID) {
 		d.zoom(1.25)
 	case id == hitDocumentZoomOut:
 		d.zoom(.8)
+	case id == hitDocumentTogglePreview:
+		d.togglePreviewMode()
+	case id == hitDocumentOpenBrowser:
+		d.openPreviewInBrowser()
+	case id == hitDocumentOpenExternal:
+		d.openPreviewExternalApp()
 	case id == hitDocumentEncodingLabel:
 		d.ui.focusEncoding = true
 	}
@@ -667,7 +696,7 @@ func (d *fileDocument) textInput(context app.TextInputContext) *app.TextInput {
 	if input := d.barTextInput(context.ID); input != nil {
 		return input
 	}
-	if context.ID != hitDocumentInput || !d.ready || d.busy || d.confirm != "" || d.comparison.confirm {
+	if context.ID != hitDocumentInput || !d.ready || d.busy || d.confirm != "" || d.comparison.confirm || d.showingPreview() {
 		return nil
 	}
 	d.ui.input.Editor = nil
@@ -730,6 +759,9 @@ func (d *fileDocument) key(event gfx.KeyEvent) gfx.EventResult {
 		}
 		return gfx.EventResult{}
 	}
+	if d.showingPreview() {
+		return gfx.EventResult{}
+	}
 	if result, ok := d.codeKey(event); ok {
 		return result
 	}
@@ -781,8 +813,10 @@ func (d *fileDocument) shortcut(event gfx.KeyEvent) gfx.EventResult {
 	if event.Modifiers&(gfx.ModifierControl|gfx.ModifierMeta) == 0 || event.Release {
 		return gfx.EventResult{}
 	}
-	if result, ok := d.codeShortcut(event); ok {
-		return result
+	if !d.showingPreview() {
+		if result, ok := d.codeShortcut(event); ok {
+			return result
+		}
 	}
 	switch strings.ToLower(event.Text) {
 	case "s":
@@ -844,6 +878,8 @@ func (d *fileDocument) scroll(event gfx.ScrollEvent) gfx.EventResult {
 			d.ui.pan.X = max(-x, min(x, d.ui.pan.X))
 			d.ui.pan.Y = max(-y, min(y, d.ui.pan.Y))
 		}
+	} else if d.showingPreview() {
+		return gfx.EventResult{}
 	} else {
 		return d.ui.code.Scroll(event)
 	}
@@ -861,7 +897,7 @@ func (d *fileDocument) pointer(event gfx.PointerEvent) gfx.EventResult {
 		return d.noteWindowPointer(event)
 	}
 
-	if d.confirm != "" {
+	if d.confirm != "" || d.showingPreview() {
 		return gfx.EventResult{}
 	}
 	return d.ui.code.Pointer(event)

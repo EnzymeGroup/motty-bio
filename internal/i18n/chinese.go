@@ -60,6 +60,8 @@ var ChineseMessages = Messages{
 		SaveDirect:            "直接保存",
 		SaveConfirmFinalTitle: "确认保存？", SaveConfirmFinalDescription: "服务器文件将被右侧所示的本地编辑版本替换。",
 		CloseTabFmt: "关闭 %s", TabsScrollbar: "文件页签",
+		Preview: "预览", Source: "源码", OpenBrowser: "浏览器打开", OpenExternal: "外部应用",
+		PreviewLoading: "正在加载预览…", PreviewUnavailable: "内置预览不可用，可在浏览器中打开或切换到源码查看。", SnapshotSavedFmt: "截图已保存到 %s",
 	},
 
 	TerminalInput: TerminalInputMessages{
