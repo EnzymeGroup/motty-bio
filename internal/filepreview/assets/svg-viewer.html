@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>SVG Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: rgba(15, 23, 42, 0.12);
+  --fg: #111827;
+  --muted: #64748b;
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e24;
+  --surface-2: #242830;
+  --border: rgba(255, 255, 255, 0.11);
+  --fg: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+body { display: flex; flex-direction: column; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+}
+.group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface-2);
+  padding: 2px;
+  border-radius: 6px;
+}
+button {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+button.outline {
+  background: var(--surface);
+  border-color: var(--border);
+}
+button:hover { background: var(--surface-2); }
+.group button:hover { background: var(--surface); }
+button.active {
+  background: var(--accent-soft) !important;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  font-weight: 500;
+}
+.info {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stage.dragging { cursor: grabbing; }
+.stage.bg-checker {
+  background-color: #e5e7eb;
+  background-image:
+    linear-gradient(45deg, #cbd5e1 25%, transparent 25%),
+    linear-gradient(-45deg, #cbd5e1 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #cbd5e1 75%),
+    linear-gradient(-45deg, transparent 75%, #cbd5e1 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+html[data-theme="dark"] .stage.bg-checker {
+  background-color: #1e2128;
+  background-image:
+    linear-gradient(45deg, #2a2f3a 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2f3a 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2f3a 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2f3a 75%);
+}
+.stage.bg-light { background: #ffffff; }
+.stage.bg-dark { background: #111317; }
+img#graphic {
+  max-width: none;
+  max-height: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  transform-origin: center center;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+}
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <button id="fit" class="outline">Fit</button>
+  <button id="actual" class="outline">100%</button>
+  <button id="zoom-out" class="outline">&minus;</button>
+  <button id="zoom-in" class="outline">+</button>
+  <div class="group" role="group" aria-label="Background">
+    <button data-bg="checker" class="active">Checker</button>
+    <button data-bg="light">Light</button>
+    <button data-bg="dark">Dark</button>
+  </div>
+  <span id="info" class="info">Loading...</span>
+</header>
+<main id="stage" class="stage bg-checker">
+  <img id="graphic" alt="SVG preview" src="./payload.svg">
+</main>
+<script>
+const stage = document.getElementById('stage');
+const img = document.getElementById('graphic');
+const info = document.getElementById('info');
+const bgButtons = [...document.querySelectorAll('[data-bg]')];
+
+let scale = 1;
+let fitScale = 1;
+let panX = 0;
+let panY = 0;
+let dragging = false;
+let dragStart = { x: 0, y: 0, panX: 0, panY: 0 };
+let meta = { name: 'image.svg', dark: false, summary: '' };
+
+function applyTransform() {
+  img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+  const w = img.naturalWidth || 0;
+  const h = img.naturalHeight || 0;
+  const dim = w && h ? `${w}×${h}` : (meta.summary || 'SVG');
+  info.textContent = `${dim} · ${Math.round(scale * 100)}%`;
+}
+
+function fitToView() {
+  const sw = Math.max(stage.clientWidth - 32, 32);
+  const sh = Math.max(stage.clientHeight - 32, 32);
+  const nw = img.naturalWidth || 600;
+  const nh = img.naturalHeight || 400;
+  fitScale = Math.min(sw / nw, sh / nh, 4);
+  scale = fitScale;
+  panX = 0;
+  panY = 0;
+  applyTransform();
+}
+
+function zoomBy(factor) {
+  scale = Math.max(0.05, Math.min(32, scale * factor));
+  applyTransform();
+}
+
+img.addEventListener('load', fitToView);
+img.addEventListener('error', () => { info.textContent = 'Failed to render SVG'; });
+if (img.complete && img.naturalWidth > 0) fitToView();
+window.addEventListener('resize', () => { if (Math.abs(scale - fitScale) < 0.01) fitToView(); });
+
+document.getElementById('fit').onclick = fitToView;
+document.getElementById('actual').onclick = () => { scale = 1; panX = 0; panY = 0; applyTransform(); };
+document.getElementById('zoom-in').onclick = () => zoomBy(1.25);
+document.getElementById('zoom-out').onclick = () => zoomBy(0.8);
+
+for (const btn of bgButtons) {
+  btn.onclick = () => {
+    for (const b of bgButtons) b.classList.toggle('active', b === btn);
+    stage.classList.remove('bg-checker', 'bg-light', 'bg-dark');
+    stage.classList.add('bg-' + btn.dataset.bg);
+  };
+}
+
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  zoomBy(Math.pow(1.002, -e.deltaY));
+}, { passive: false });
+
+stage.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true;
+  dragStart = { x: e.clientX, y: e.clientY, panX, panY };
+  stage.classList.add('dragging');
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  panX = dragStart.panX + (e.clientX - dragStart.x);
+  panY = dragStart.panY + (e.clientY - dragStart.y);
+  applyTransform();
+});
+stage.addEventListener('pointerup', () => {
+  dragging = false;
+  stage.classList.remove('dragging');
+});
+
+function applyTheme(dark) {
+  meta.dark = Boolean(dark);
+  document.documentElement.dataset.theme = meta.dark ? 'dark' : 'light';
+}
+if (window.viva) {
+  window.viva.onmessage = (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'theme') applyTheme(msg.dark);
+    } catch {}
+  };
+}
+
+fetch('./meta.json').then(r => r.json()).then(m => {
+  meta = { ...meta, ...m };
+  applyTheme(meta.dark);
+  document.title = `${meta.name} — SVG`;
+  applyTransform();
+}).catch(() => {});
+</script>
+</body>
+</html>

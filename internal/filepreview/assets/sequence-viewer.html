@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sequence &amp; MSA Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: rgba(15, 23, 42, 0.12);
+  --fg: #111827;
+  --muted: #64748b;
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e24;
+  --surface-2: #242830;
+  --border: rgba(255, 255, 255, 0.11);
+  --fg: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+body { display: flex; flex-direction: column; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+button, select, input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 8px;
+  outline: none;
+}
+button { cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+input.search {
+  width: 170px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+input:focus, select:focus { border-color: var(--accent); }
+.stats {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.canvas-wrap {
+  position: relative;
+  flex: 1;
+  overflow: auto;
+  background: var(--bg);
+}
+.spacer {
+  position: relative;
+  min-width: 100%;
+}
+canvas#grid {
+  position: sticky;
+  top: 0;
+  left: 0;
+  display: block;
+}
+.inspector {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 34px;
+  font-size: 11px;
+}
+.inspector-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.toast {
+  position: fixed;
+  right: 14px;
+  bottom: 44px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  pointer-events: none;
+}
+.toast.show { opacity: 0.92; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <select id="scheme" title="Color scheme">
+    <option value="auto">Auto (ClustalX / NT)</option>
+    <option value="clustal">ClustalX (AA)</option>
+    <option value="hydro">Hydrophobicity</option>
+    <option value="conservation">Conservation</option>
+    <option value="nucleotide">Nucleotide (DNA/RNA)</option>
+    <option value="none">Plain</option>
+  </select>
+  <select id="zoom" title="Cell size">
+    <option value="11">Compact</option>
+    <option value="14" selected>Medium</option>
+    <option value="18">Large</option>
+  </select>
+  <button id="insertions-btn" style="display:none" title="Toggle lowercase A3M insertions">Hide insertions</button>
+  <input id="search" class="search" placeholder="Search header or motif...">
+  <span id="match-info" style="font-size:11px;color:var(--muted)"></span>
+  <span id="stats" class="stats">Loading...</span>
+</header>
+<div id="wrap" class="canvas-wrap">
+  <div id="spacer" class="spacer">
+    <canvas id="grid"></canvas>
+  </div>
+</div>
+<footer class="inspector">
+  <span id="insp" class="inspector-title">Click a sequence row to inspect or copy</span>
+  <button id="copy-seq" disabled>Copy sequence</button>
+  <button id="copy-fasta" disabled>Copy FASTA</button>
+</footer>
+<div id="toast" class="toast"></div>
+<script>
+const wrap = document.getElementById('wrap');
+const spacer = document.getElementById('spacer');
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+const schemeEl = document.getElementById('scheme');
+const zoomEl = document.getElementById('zoom');
+const searchEl = document.getElementById('search');
+const matchInfo = document.getElementById('match-info');
+const statsEl = document.getElementById('stats');
+const inspEl = document.getElementById('insp');
+const copySeqBtn = document.getElementById('copy-seq');
+const copyFastaBtn = document.getElementById('copy-fasta');
+const insBtn = document.getElementById('insertions-btn');
+const toastEl = document.getElementById('toast');
+
+let meta = { name: 'sequence.fasta', format: 'fasta', dark: false };
+let rawRecords = [];
+let records = [];
+let filtered = [];
+let selectedIdx = -1;
+let maxLen = 0;
+let isNucleotide = false;
+let isA3M = false;
+let hideInsertions = true;
+let consensus = '';
+let conservation = [];
+let motifQuery = '';
+let cellW = 14;
+let rowH = 20;
+let labelW = 190;
+const headerH = 44;
+
+const CLUSTAL = {
+  A:'#80a0f0', I:'#80a0f0', L:'#80a0f0', M:'#80a0f0', F:'#80a0f0', W:'#80a0f0', V:'#80a0f0', C:'#f08080',
+  K:'#f01505', R:'#f01505',
+  E:'#c048c0', D:'#c048c0',
+  N:'#15c015', Q:'#15c015', S:'#15c015', T:'#15c015',
+  H:'#15a4a4', Y:'#15a4a4',
+  G:'#f09048', P:'#c0c000',
+};
+const HYDRO = {
+  I:'#d9480f', V:'#e8590c', L:'#f76707', F:'#fd7e14', C:'#ffa94d', M:'#ffc078', A:'#ffd8a8',
+  G:'#adb5bd', T:'#d0ebff', S:'#a5d8ff', W:'#ffe8cc', Y:'#ffe3e3', P:'#dee2e6',
+  H:'#74c0fc', E:'#4dabf7', Q:'#4dabf7', D:'#339af0', N:'#339af0', K:'#228be6', R:'#1c7ed6',
+};
+const NT = {
+  A:'#40c057', T:'#fa5252', U:'#fa5252', G:'#fab005', C:'#339af0', N:'#868e96',
+};
+
+function showToast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toastEl.classList.remove('show'), 1400);
+}
+
+function applyTheme(dark) {
+  meta.dark = Boolean(dark);
+  document.documentElement.dataset.theme = meta.dark ? 'dark' : 'light';
+  render();
+}
+
+function parseStockholm(text) {
+  const map = new Map();
+  const order = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#') || line === '//') continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue;
+    const id = parts[0], seq = parts[1];
+    if (!map.has(id)) { map.set(id, []); order.push(id); }
+    map.get(id).push(seq);
+  }
+  return order.map(id => ({ header: id, seq: map.get(id).join('') }));
+}
+
+function parseClustal(text) {
+  const map = new Map();
+  const order = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    if (!rawLine.trim() || /^CLUSTAL|^MUSCLE|^T-COFFEE|^\s+[*:. ]+$/i.test(rawLine)) continue;
+    const m = /^(\S+)\s+([A-Za-z.\-*]+)(?:\s+\d+)?\s*$/.exec(rawLine.trim());
+    if (!m) continue;
+    const [, id, seq] = m;
+    if (!map.has(id)) { map.set(id, []); order.push(id); }
+    map.get(id).push(seq);
+  }
+  return order.map(id => ({ header: id, seq: map.get(id).join('') }));
+}
+
+function parseFasta(text) {
+  const out = [];
+  let header = '';
+  let chunks = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(';')) continue;
+    if (line.startsWith('>')) {
+      if (header || chunks.length) out.push({ header: header || 'Sequence', seq: chunks.join('') });
+      header = line.slice(1).trim() || `Seq_${out.length + 1}`;
+      chunks = [];
+    } else {
+      chunks.push(line.replace(/\s+/g, ''));
+    }
+  }
+  if (header || chunks.length) out.push({ header: header || meta.name, seq: chunks.join('') });
+  return out;
+}
+
+function parseSequences(text, format) {
+  if (format === 'stockholm' || text.startsWith('# STOCKHOLM')) return parseStockholm(text);
+  if (format === 'clustal' || /^CLUSTAL/i.test(text.trimStart())) return parseClustal(text);
+  return parseFasta(text);
+}
+
+function rebuildProcessed() {
+  records = rawRecords.map(r => {
+    const displaySeq = (isA3M && hideInsertions) ? r.seq.replace(/[a-z]/g, '') : r.seq;
+    return { ...r, displaySeq };
+  });
+  maxLen = 0;
+  let ntCount = 0, totalLetters = 0;
+  const sampleLimit = Math.min(records.length, 64);
+  for (let i = 0; i < records.length; i++) {
+    if (records[i].displaySeq.length > maxLen) maxLen = records[i].displaySeq.length;
+    if (i < sampleLimit) {
+      const s = records[i].displaySeq;
+      for (let j = 0; j < s.length && totalLetters < 4000; j++) {
+        const c = s[j].toUpperCase();
+        if (c >= 'A' && c <= 'Z') {
+          totalLetters++;
+          if ('ACGTUN'.includes(c)) ntCount++;
+        }
+      }
+    }
+  }
+  isNucleotide = totalLetters > 0 && (ntCount / totalLetters) >= 0.88;
+  computeConsensus();
+  applyFilter();
+}
+
+function computeConsensus() {
+  const cols = Math.min(maxLen, 8000);
+  const sample = Math.min(records.length, 500);
+  consensus = '';
+  conservation = new Float32Array(cols);
+  if (!sample) return;
+  let cons = '';
+  for (let c = 0; c < cols; c++) {
+    const freq = Object.create(null);
+    let nonGap = 0, bestCh = '-', bestN = 0;
+    for (let r = 0; r < sample; r++) {
+      const ch = (records[r].displaySeq[c] || '-').toUpperCase();
+      if (ch === '-' || ch === '.') continue;
+      nonGap++;
+      const n = (freq[ch] || 0) + 1;
+      freq[ch] = n;
+      if (n > bestN) { bestN = n; bestCh = ch; }
+    }
+    cons += bestCh;
+    conservation[c] = nonGap > 0 ? bestN / sample : 0;
+  }
+  consensus = cons;
+}
+
+function applyFilter() {
+  const q = searchEl.value.trim();
+  const qLower = q.toLowerCase();
+  motifQuery = q.toUpperCase();
+  if (!q) {
+    filtered = records.map((r, i) => ({ ...r, origIdx: i, matches: null }));
+    matchInfo.textContent = '';
+  } else {
+    filtered = [];
+    let motifHits = 0;
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      const inHeader = r.header.toLowerCase().includes(qLower);
+      const upper = r.displaySeq.toUpperCase();
+      let matches = null;
+      if (motifQuery.length >= 2) {
+        let pos = upper.indexOf(motifQuery);
+        while (pos !== -1) {
+          if (!matches) matches = [];
+          matches.push(pos);
+          motifHits++;
+          pos = upper.indexOf(motifQuery, pos + 1);
+        }
+      }
+      if (inHeader || matches) {
+        filtered.push({ ...r, origIdx: i, matches });
+      }
+    }
+    matchInfo.textContent = `${filtered.length} seqs${motifHits ? ` · ${motifHits} motif hits` : ''}`;
+  }
+  const totalW = labelW + maxLen * cellW + 40;
+  const totalH = headerH + filtered.length * rowH + 24;
+  spacer.style.width = `${Math.max(totalW, wrap.clientWidth)}px`;
+  spacer.style.height = `${Math.max(totalH, wrap.clientHeight)}px`;
+  statsEl.textContent = `${records.length.toLocaleString()} ${records.length === 1 ? 'seq' : 'seqs'} · max ${maxLen.toLocaleString()} ${isNucleotide ? 'nt' : 'aa'}${isA3M ? ' · A3M' : ''}`;
+  render();
+}
+
+function residueColor(ch, col) {
+  const u = ch.toUpperCase();
+  if (u === '-' || u === '.') return null;
+  let s = schemeEl.value;
+  if (s === 'auto') s = isNucleotide ? 'nucleotide' : 'clustal';
+  if (s === 'none') return null;
+  if (s === 'nucleotide') return NT[u] || null;
+  if (s === 'hydro') return HYDRO[u] || null;
+  if (s === 'conservation') {
+    if (col < consensus.length && u === consensus[col]) {
+      const v = conservation[col];
+      if (v >= 0.8) return '#4f46e5';
+      if (v >= 0.5) return '#6366f1';
+      return '#a5b4fc';
+    }
+    return null;
+  }
+  return CLUSTAL[u] || null;
+}
+
+function render() {
+  const dpr = window.devicePixelRatio || 1;
+  const vw = wrap.clientWidth;
+  const vh = wrap.clientHeight;
+  if (!vw || !vh) return;
+  if (canvas.width !== Math.round(vw * dpr) || canvas.height !== Math.round(vh * dpr)) {
+    canvas.width = Math.round(vw * dpr);
+    canvas.height = Math.round(vh * dpr);
+    canvas.style.width = `${vw}px`;
+    canvas.style.height = `${vh}px`;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const dark = meta.dark;
+  const bg = dark ? '#14161a' : '#f6f7f9';
+  const surface = dark ? '#1b1e24' : '#ffffff';
+  const border = dark ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)';
+  const fg = dark ? '#e5e7eb' : '#111827';
+  const muted = dark ? '#94a3b8' : '#64748b';
+  const selBg = dark ? 'rgba(129,140,248,0.22)' : 'rgba(79,70,229,0.12)';
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, vw, vh);
+
+  const sx = wrap.scrollLeft;
+  const sy = wrap.scrollTop;
+  const firstCol = Math.max(0, Math.floor((sx - labelW) / cellW));
+  const lastCol = Math.min(maxLen - 1, Math.ceil((sx + vw - labelW) / cellW));
+  const firstRow = Math.max(0, Math.floor((sy - headerH) / rowH));
+  const lastRow = Math.min(filtered.length - 1, Math.ceil((sy + vh - headerH) / rowH));
+
+  ctx.font = `${Math.max(10, Math.round(cellW * 0.78))}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textBaseline = 'middle';
+
+  // Rows
+  for (let r = firstRow; r <= lastRow; r++) {
+    const rec = filtered[r];
+    const y = headerH + r * rowH - sy;
+    if (rec.origIdx === selectedIdx) {
+      ctx.fillStyle = selBg;
+      ctx.fillRect(0, y, vw, rowH);
+    } else if (r % 2 === 1) {
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.02)';
+      ctx.fillRect(0, y, vw, rowH);
+    }
+    const seq = rec.displaySeq;
+    ctx.textAlign = 'center';
+    for (let c = firstCol; c <= lastCol; c++) {
+      if (c >= seq.length) break;
+      const ch = seq[c];
+      const x = labelW + c * cellW - sx;
+      if (x + cellW < labelW || x > vw) continue;
+      const col = residueColor(ch, c);
+      if (col) {
+        ctx.fillStyle = col;
+        ctx.globalAlpha = dark ? 0.78 : 0.82;
+        ctx.fillRect(x, y + 1, cellW - 0.5, rowH - 2);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#ffffff';
+      } else {
+        ctx.fillStyle = (ch === '-' || ch === '.') ? muted : fg;
+      }
+      ctx.fillText(ch, x + cellW / 2, y + rowH / 2 + 0.5);
+    }
+    // Motif highlights
+    if (rec.matches && motifQuery.length >= 2) {
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      for (const pos of rec.matches) {
+        const mx = labelW + pos * cellW - sx;
+        const mw = motifQuery.length * cellW;
+        if (mx + mw >= labelW && mx <= vw) {
+          ctx.strokeRect(mx + 1, y + 1.5, mw - 2, rowH - 3);
+        }
+      }
+    }
+  }
+
+  // Left sticky label column
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, headerH, labelW, vh - headerH);
+  ctx.textAlign = 'left';
+  ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+  for (let r = firstRow; r <= lastRow; r++) {
+    const rec = filtered[r];
+    const y = headerH + r * rowH - sy;
+    if (rec.origIdx === selectedIdx) {
+      ctx.fillStyle = selBg;
+      ctx.fillRect(0, y, labelW, rowH);
+    }
+    ctx.fillStyle = fg;
+    const label = rec.header.split(/\s+/)[0];
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(8, y, labelW - 14, rowH);
+    ctx.clip();
+    ctx.fillText(label, 8, y + rowH / 2 + 0.5);
+    ctx.restore();
+  }
+
+  // Top sticky ruler + conservation bar
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, vw, headerH);
+  ctx.fillStyle = muted;
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Sequence ID', 8, 16);
+  ctx.fillText(records.length > 1 ? 'Conservation' : 'Position', 8, 34);
+  const tickStep = cellW < 12 ? 10 : 5;
+  for (let c = firstCol; c <= lastCol; c++) {
+    const x = labelW + c * cellW - sx;
+    if (x + cellW < labelW || x > vw) continue;
+    if ((c + 1) === 1 || (c + 1) % tickStep === 0) {
+      ctx.fillStyle = muted;
+      ctx.fillText(String(c + 1), x + 1, 13);
+    }
+    if (records.length > 1 && c < conservation.length) {
+      const h = Math.max(1, Math.round(conservation[c] * 16));
+      ctx.fillStyle = dark ? '#818cf8' : '#4f46e5';
+      ctx.globalAlpha = 0.72;
+      ctx.fillRect(x + 1, headerH - 4 - h, Math.max(2, cellW - 2), h);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.fillStyle = border;
+  ctx.fillRect(0, headerH - 1, vw, 1);
+  ctx.fillRect(labelW - 1, 0, 1, vh);
+}
+
+wrap.addEventListener('scroll', render, { passive: true });
+window.addEventListener('resize', render);
+schemeEl.onchange = render;
+zoomEl.onchange = () => {
+  cellW = Number(zoomEl.value);
+  rowH = cellW + 6;
+  applyFilter();
+};
+searchEl.oninput = applyFilter;
+insBtn.onclick = () => {
+  hideInsertions = !hideInsertions;
+  insBtn.textContent = hideInsertions ? 'Show insertions' : 'Hide insertions';
+  insBtn.classList.toggle('active', !hideInsertions);
+  rebuildProcessed();
+};
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const y = e.clientY - rect.top + wrap.scrollTop;
+  const r = Math.floor((y - headerH) / rowH);
+  if (r < 0 || r >= filtered.length) return;
+  const rec = filtered[r];
+  selectedIdx = rec.origIdx;
+  const ungapped = rec.seq.replace(/[-.\s]/g, '');
+  inspEl.textContent = `>${rec.header}  (${ungapped.length} ${isNucleotide ? 'nt' : 'aa'}, aligned ${rec.displaySeq.length})`;
+  copySeqBtn.disabled = false;
+  copyFastaBtn.disabled = false;
+  render();
+});
+
+async function copyText(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`Copied ${label}`);
+  } catch {
+    if (window.viva?.postMessage) {
+      window.viva.postMessage(JSON.stringify({ type: 'copy', text }));
+      showToast(`Copied ${label}`);
+    }
+  }
+}
+copySeqBtn.onclick = () => {
+  if (selectedIdx < 0) return;
+  copyText(records[selectedIdx].seq.replace(/[-.\s]/g, ''), 'ungapped sequence');
+};
+copyFastaBtn.onclick = () => {
+  if (selectedIdx < 0) return;
+  const rec = records[selectedIdx];
+  copyText(`>${rec.header}\n${rec.seq}\n`, 'FASTA entry');
+};
+
+if (window.viva) {
+  window.viva.onmessage = (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'theme') applyTheme(msg.dark);
+    } catch {}
+  };
+}
+
+async function boot() {
+  try {
+    const [metaRes, payloadRes] = await Promise.all([fetch('./meta.json'), fetch('./payload')]);
+    if (!metaRes.ok || !payloadRes.ok) throw new Error('Could not load sequence file');
+    meta = { ...meta, ...(await metaRes.json()) };
+    applyTheme(meta.dark);
+    document.title = `${meta.name} — Sequence`;
+    const text = await payloadRes.text();
+    rawRecords = parseSequences(text, meta.format);
+    isA3M = meta.format === 'a3m' || rawRecords.some(r => /[a-z]/.test(r.seq));
+    if (isA3M) {
+      insBtn.style.display = '';
+      insBtn.textContent = 'Show insertions';
+    }
+    rebuildProcessed();
+  } catch (err) {
+    statsEl.textContent = String(err?.message || err);
+  }
+}
+boot();
+</script>
+</body>
+</html>

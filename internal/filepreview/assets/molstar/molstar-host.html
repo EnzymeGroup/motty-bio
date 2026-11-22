@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Mol* Structure Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef0f4;
+  --border: rgba(15, 23, 42, 0.12);
+  --fg: #111827;
+  --muted: #64748b;
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.12);
+  --danger: #dc2626;
+  --stage-bg: #f6f7f9;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+}
+html[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1b1e24;
+  --surface-2: #242830;
+  --border: rgba(255, 255, 255, 0.11);
+  --fg: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-soft: rgba(129, 140, 248, 0.18);
+  --danger: #f87171;
+  --stage-bg: #14161a;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+}
+body {
+  display: flex;
+  flex-direction: column;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+.group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface-2);
+  padding: 2px;
+  border-radius: 6px;
+}
+.sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 2px;
+}
+button, select, input {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 8px;
+  outline: none;
+}
+button {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.group button:hover:not(:disabled) {
+  background: var(--surface);
+}
+button.active {
+  background: var(--accent-soft) !important;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  font-weight: 500;
+}
+button.outline {
+  border-color: var(--border);
+  background: var(--surface);
+}
+button.outline:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+select, input {
+  background: var(--surface);
+  border-color: var(--border);
+}
+select:focus, input:focus {
+  border-color: var(--accent);
+}
+input.locate {
+  width: 78px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.spacer { flex: 1; }
+.stage-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 160px;
+  background: var(--stage-bg);
+}
+iframe#viewer {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  z-index: 5;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+.overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+.overlay.error {
+  color: var(--danger);
+  pointer-events: auto;
+  padding: 20px;
+  text-align: center;
+}
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.pill {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 4;
+  max-width: calc(100% - 20px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.legend {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  z-index: 4;
+  pointer-events: none;
+}
+.legend.visible { display: flex; }
+.swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.swatch i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.seq-panel {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  max-height: 118px;
+  overflow: auto;
+  padding: 6px 10px;
+  flex-shrink: 0;
+  display: none;
+}
+.seq-panel.visible { display: block; }
+.chain-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.chain-row:last-child { margin-bottom: 0; }
+.chain-badge {
+  flex-shrink: 0;
+  min-width: 28px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 11px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.residues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.res {
+  width: 15px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--fg);
+}
+.res:hover {
+  background: var(--surface-2);
+}
+.res.selected {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.model-nav {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+.model-nav.visible { display: inline-flex; }
+.model-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 58px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="group" role="group" aria-label="Representation">
+    <button data-mode="cartoon" class="active" title="Cartoon">Cartoon</button>
+    <button data-mode="stick" title="Ball &amp; Stick">Stick</button>
+    <button data-mode="surface" title="Molecular Surface">Surface</button>
+    <button data-mode="spacefill" title="Spacefill">Spacefill</button>
+    <button data-mode="backbone" title="Backbone">Backbone</button>
+  </div>
+  <select id="palette" title="Color scheme">
+    <option value="secondary">Secondary</option>
+    <option value="chain">Chain</option>
+    <option value="plddt">pLDDT</option>
+    <option value="bfactor">B-factor</option>
+    <option value="element">Element (CPK)</option>
+    <option value="sequence">Rainbow</option>
+    <option value="hydrophobicity">Hydrophobicity</option>
+    <option value="uniform">Uniform</option>
+  </select>
+  <select id="preset" title="Lighting preset">
+    <option value="standard">Standard</option>
+    <option value="studio">Studio</option>
+    <option value="illustration">Illustration</option>
+    <option value="soft">Soft AO</option>
+  </select>
+  <div class="sep"></div>
+  <input id="locate" class="locate" placeholder="A:25" title="Jump to Chain:Residue (e.g. A:25)">
+  <button id="locate-btn" class="outline" title="Focus residue">Go</button>
+  <button id="clear-btn" class="outline" title="Clear selection">Clear</button>
+  <div class="model-nav" id="model-nav">
+    <div class="sep"></div>
+    <button id="model-prev" class="outline" title="Previous model/molecule">&lsaquo;</button>
+    <span id="model-label" class="model-label">1 / 1</span>
+    <button id="model-next" class="outline" title="Next model/molecule">&rsaquo;</button>
+  </div>
+  <div class="spacer"></div>
+  <button id="water-btn" class="outline active" title="Toggle water molecules" style="display:none">Water</button>
+  <button id="seq-btn" class="outline" title="Toggle sequence bar" style="display:none">Seq</button>
+  <button id="spin-btn" class="outline" title="Toggle spin">Spin</button>
+  <button id="reset-btn" class="outline" title="Reset camera (R)">Reset</button>
+  <button id="snap-btn" class="outline" title="Export PNG snapshot">PNG</button>
+</header>
+<div class="stage-wrap">
+  <iframe id="viewer" title="Mol* 3D Structure Viewer" sandbox="allow-scripts allow-same-origin"></iframe>
+  <div id="overlay" class="overlay"><div class="spinner"></div><div id="overlay-text">Loading Mol* viewer...</div></div>
+  <div id="pill" class="pill">Initializing...</div>
+  <div id="plddt-legend" class="legend">
+    <span class="swatch"><i style="background:#0053d6"></i>&gt;90</span>
+    <span class="swatch"><i style="background:#65cbf3"></i>70–90</span>
+    <span class="swatch"><i style="background:#ffdb13"></i>50–70</span>
+    <span class="swatch"><i style="background:#ff7d45"></i>&lt;50</span>
+  </div>
+</div>
+<section id="seq-panel" class="seq-panel" aria-label="Sequence"></section>
+<script type="module">
+import { sendViewerCommand, subscribeViewer } from './protein-viewer-client.js';
+
+const frame = document.getElementById('viewer');
+const overlay = document.getElementById('overlay');
+const overlayText = document.getElementById('overlay-text');
+const pill = document.getElementById('pill');
+const paletteEl = document.getElementById('palette');
+const presetEl = document.getElementById('preset');
+const locateEl = document.getElementById('locate');
+const waterBtn = document.getElementById('water-btn');
+const seqBtn = document.getElementById('seq-btn');
+const spinBtn = document.getElementById('spin-btn');
+const seqPanel = document.getElementById('seq-panel');
+const plddtLegend = document.getElementById('plddt-legend');
+const modelNav = document.getElementById('model-nav');
+const modelLabel = document.getElementById('model-label');
+const modelPrev = document.getElementById('model-prev');
+const modelNext = document.getElementById('model-next');
+const modeButtons = [...document.querySelectorAll('[data-mode]')];
+
+let meta = { name: 'structure', format: 'pdb', dark: false, background: 0xf6f7f9, summary: '' };
+let content = '';
+let frameLoaded = false;
+let ready = false;
+let currentMode = 'cartoon';
+let currentPalette = 'secondary';
+let target = { chain: '', residue: null };
+let waterVisible = true;
+let spinning = false;
+let modelCount = 1;
+let modelIndex = 0;
+
+function send(cmd) { sendViewerCommand(frame, cmd); }
+
+function applyHostTheme(dark, bg) {
+  meta.dark = Boolean(dark);
+  if (Number.isInteger(bg)) meta.background = bg;
+  else meta.background = meta.dark ? 0x14161a : 0xf6f7f9;
+  document.documentElement.dataset.theme = meta.dark ? 'dark' : 'light';
+  document.documentElement.style.setProperty('--stage-bg', '#' + meta.background.toString(16).padStart(6, '0'));
+}
+
+function syncStyleUI() {
+  for (const btn of modeButtons) btn.classList.toggle('active', btn.dataset.mode === currentMode);
+  paletteEl.value = currentPalette;
+  plddtLegend.classList.toggle('visible', currentPalette === 'plddt');
+}
+
+function syncModelUI() {
+  modelNav.classList.toggle('visible', modelCount > 1);
+  modelLabel.textContent = `${modelIndex + 1} / ${modelCount}`;
+  modelPrev.disabled = !ready || modelIndex <= 0;
+  modelNext.disabled = !ready || modelIndex >= modelCount - 1;
+}
+
+function setSelectedResidueHighlight(chain, residue) {
+  for (const el of seqPanel.querySelectorAll('.res.selected')) el.classList.remove('selected');
+  if (!chain || residue == null) return;
+  const match = seqPanel.querySelector(`.res[data-chain="${CSS.escape(chain)}"][data-res="${CSS.escape(String(residue))}"]`);
+  if (match) {
+    match.classList.add('selected');
+    match.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+function renderSequence(info) {
+  seqPanel.replaceChildren();
+  const chains = info?.chains || [];
+  if (!chains.length) {
+    seqBtn.style.display = 'none';
+    seqPanel.classList.remove('visible');
+    return;
+  }
+  seqBtn.style.display = '';
+  for (const chain of chains) {
+    const row = document.createElement('div');
+    row.className = 'chain-row';
+    const badge = document.createElement('span');
+    badge.className = 'chain-badge';
+    badge.textContent = chain.id || '?';
+    const list = document.createElement('div');
+    list.className = 'residues';
+    const frag = document.createDocumentFragment();
+    for (const r of chain.residues || []) {
+      const span = document.createElement('span');
+      span.className = 'res';
+      span.textContent = r.code || 'X';
+      span.dataset.chain = chain.id;
+      span.dataset.res = r.id;
+      span.title = `${chain.id}:${r.id} (${r.name})`;
+      frag.appendChild(span);
+    }
+    list.appendChild(frag);
+    row.append(badge, list);
+    seqPanel.appendChild(row);
+  }
+}
+
+seqPanel.addEventListener('click', (e) => {
+  const el = e.target.closest('.res');
+  if (!el || !ready) return;
+  const chain = el.dataset.chain;
+  const residue = el.dataset.res;
+  target = { chain, residue };
+  locateEl.value = `${chain}:${residue}`;
+  setSelectedResidueHighlight(chain, residue);
+  send({ type: 'select', chain, residue, focus: true });
+});
+
+function loadStructure(idx = 0) {
+  if (!frameLoaded || !content) return;
+  ready = false;
+  modelIndex = idx;
+  overlay.classList.remove('hidden', 'error');
+  overlayText.textContent = `Rendering ${meta.name}...`;
+  send({
+    type: 'load',
+    content,
+    format: meta.format,
+    modelIndex: idx,
+    assetId: meta.name,
+    assetVersion: String(meta.revision || 1),
+    dark: meta.dark,
+    background: meta.background,
+  });
+}
+
+subscribeViewer(frame, (event) => {
+  if (event.type === 'ready') {
+    ready = true;
+    overlay.classList.add('hidden');
+    if (event.mode) currentMode = event.mode;
+    if (event.palette) currentPalette = event.palette;
+    modelCount = event.modelCount || 1;
+    modelIndex = event.modelIndex || 0;
+    waterVisible = true;
+    waterBtn.style.display = event.hasWater ? '' : 'none';
+    waterBtn.classList.toggle('active', waterVisible);
+    syncStyleUI();
+    syncModelUI();
+    const parts = [meta.summary || `${event.atoms.toLocaleString()} atoms`];
+    if (modelCount > 1) parts.push(`Model ${modelIndex + 1}/${modelCount}`);
+    pill.textContent = parts.join(' · ');
+    if (window.viva?.postMessage) {
+      window.viva.postMessage(JSON.stringify({ type: 'ready', atoms: event.atoms, mode: currentMode, palette: currentPalette, modelCount }));
+    }
+  } else if (event.type === 'structure-info') {
+    renderSequence(event.info);
+  } else if (event.type === 'pick') {
+    target = { chain: event.chain, residue: event.residue };
+    locateEl.value = `${event.chain}:${event.residue}`;
+    setSelectedResidueHighlight(event.chain, event.residue);
+    send({ type: 'select', chain: event.chain, residue: event.residue });
+  } else if (event.type === 'selected') {
+    target = { chain: event.chain || '', residue: event.residue ?? null };
+    setSelectedResidueHighlight(target.chain, target.residue);
+    if (event.residue != null) {
+      pill.textContent = `Selected ${event.chain}:${event.residue} · ${event.atoms} atoms`;
+    } else {
+      pill.textContent = meta.summary || `${event.atoms} atoms`;
+    }
+  } else if (event.type === 'clear-selection') {
+    target = { chain: '', residue: null };
+    locateEl.value = '';
+    setSelectedResidueHighlight('', null);
+  } else if (event.type === 'snapshot') {
+    const a = document.createElement('a');
+    a.href = event.data;
+    a.download = `${meta.name.replace(/\.[^.]+$/, '')}.png`;
+    a.click();
+    if (window.viva?.postMessage) {
+      window.viva.postMessage(JSON.stringify({ type: 'snapshot', name: a.download, data: event.data }));
+    }
+  } else if (event.type === 'error') {
+    overlay.classList.remove('hidden');
+    overlay.classList.add('error');
+    overlayText.textContent = `Failed to load structure: ${event.message}`;
+    pill.textContent = event.message;
+    if (window.viva?.postMessage) {
+      window.viva.postMessage(JSON.stringify({ type: 'error', message: event.message }));
+    }
+  }
+});
+
+for (const btn of modeButtons) {
+  btn.onclick = () => {
+    if (!ready) return;
+    currentMode = btn.dataset.mode;
+    syncStyleUI();
+    send({ type: 'style', mode: currentMode, palette: currentPalette, ...target });
+  };
+}
+paletteEl.onchange = () => {
+  if (!ready) return;
+  currentPalette = paletteEl.value;
+  syncStyleUI();
+  send({ type: 'style', mode: currentMode, palette: currentPalette, ...target });
+};
+presetEl.onchange = () => {
+  if (!ready) return;
+  send({ type: 'presentation', presentation: { preset: presetEl.value, background: 'theme' } });
+};
+function locateResidue() {
+  if (!ready) return;
+  const raw = locateEl.value.trim();
+  const match = /^([^:\s]{1,8}):(-?\d+[A-Za-z]?)$/.exec(raw);
+  if (!match) return;
+  target = { chain: match[1], residue: match[2] };
+  setSelectedResidueHighlight(target.chain, target.residue);
+  send({ type: 'select', chain: target.chain, residue: target.residue, focus: true });
+}
+document.getElementById('locate-btn').onclick = locateResidue;
+locateEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') locateResidue(); });
+document.getElementById('clear-btn').onclick = () => {
+  if (!ready) return;
+  target = { chain: '', residue: null };
+  locateEl.value = '';
+  setSelectedResidueHighlight('', null);
+  send({ type: 'select', chain: '', residue: null });
+};
+waterBtn.onclick = () => {
+  if (!ready) return;
+  waterVisible = !waterVisible;
+  waterBtn.classList.toggle('active', waterVisible);
+  send({ type: 'water', visible: waterVisible });
+};
+seqBtn.onclick = () => {
+  const open = seqPanel.classList.toggle('visible');
+  seqBtn.classList.toggle('active', open);
+};
+spinBtn.onclick = () => {
+  if (!ready) return;
+  spinning = !spinning;
+  spinBtn.classList.toggle('active', spinning);
+  send({ type: 'rotate' });
+};
+document.getElementById('reset-btn').onclick = () => { if (ready) send({ type: 'reset' }); };
+document.getElementById('snap-btn').onclick = () => { if (ready) send({ type: 'snapshot' }); };
+modelPrev.onclick = () => { if (ready && modelIndex > 0) loadStructure(modelIndex - 1); };
+modelNext.onclick = () => { if (ready && modelIndex < modelCount - 1) loadStructure(modelIndex + 1); };
+
+window.addEventListener('keydown', (e) => {
+  if (document.activeElement === locateEl) return;
+  if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey && ready) {
+    send({ type: 'reset' });
+  }
+});
+
+if (window.viva) {
+  window.viva.onmessage = (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'theme') {
+        applyHostTheme(msg.dark, msg.background);
+        if (ready) send({ type: 'theme', dark: meta.dark, background: meta.background });
+      }
+    } catch {}
+  };
+}
+
+frame.addEventListener('load', () => {
+  frameLoaded = true;
+  if (content) loadStructure(0);
+});
+frame.src = './protein-viewer.html';
+
+async function boot() {
+  try {
+    const [metaRes, payloadRes] = await Promise.all([fetch('./meta.json'), fetch('./payload')]);
+    if (!metaRes.ok || !payloadRes.ok) throw new Error('Could not fetch structure payload');
+    meta = { ...meta, ...(await metaRes.json()) };
+    applyHostTheme(meta.dark, meta.background);
+    document.title = `${meta.name} — Mol*`;
+    content = await payloadRes.text();
+    if (frameLoaded) loadStructure(0);
+  } catch (err) {
+    overlay.classList.remove('hidden');
+    overlay.classList.add('error');
+    overlayText.textContent = String(err?.message || err);
+  }
+}
+boot();
+</script>
+</body>
+</html>
