@@ -564,7 +564,7 @@ func TestSwitchingUpdateSourceInDialogKeepsDialogAndChecks(t *testing.T) {
 		t.Fatalf("update should not be available for CNB: %+v", state.update)
 	}
 	_, texts = paintedTexts(state)
-	latestMsg := fmt.Sprintf(state.messages.Tools.UpdateLatestFmt, update.Current)
+	latestMsg := fmt.Sprintf(state.messages.Tools.UpdateLatestFmt, update.CurrentVersion())
 	if !contains(texts, latestMsg) {
 		t.Fatalf("dialog does not show latest version message %q: %q", latestMsg, texts)
 	}

@@ -157,7 +157,7 @@ func (state *State) declareUpdateDialog(c ui.C) {
 		title := m.GeneralUpdate
 		text := state.update.text
 		if text == "" {
-			text = fmt.Sprintf(m.UpdateLatestFmt, update.Current)
+			text = fmt.Sprintf(m.UpdateLatestFmt, update.CurrentVersion())
 		}
 		lines := max(wrappedLines(canvas, text, metrics.FontSizeM, bodyWidth), 1)
 		boxHeight := float32(max(lines*20+32, 80))
