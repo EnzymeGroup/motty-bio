@@ -62,6 +62,7 @@ func (c *canvas) Fill(x, y, width, height int, blue, green, red byte) {
 
 func (c *canvas) Bell()                  { c.mu.Lock(); c.bells++; c.mu.Unlock() }
 func (c *canvas) ServerText(text string) { c.mu.Lock(); c.text = text; c.mu.Unlock() }
+func (c *canvas) Flush()                 {}
 
 func (c *canvas) at(x, y int) [3]byte {
 	c.mu.Lock()
@@ -75,6 +76,11 @@ func (c *canvas) at(x, y int) [3]byte {
 type server struct {
 	t    *testing.T
 	conn net.Conn
+	// bits is the pixel size the handshake expects the client to ask for; zero
+	// is 32.
+	bits byte
+	// format is the SetPixelFormat message the handshake received.
+	format []byte
 }
 
 func (s *server) write(data ...[]byte) {
@@ -165,9 +171,14 @@ func (s *server) handshake(version string, security byte, password string, width
 	s.read(1) // ClientInit
 	s.write(serverInit(width, height, "test desktop"))
 	format := s.read(20)
-	if format[0] != 0 || format[4] != 32 || format[7] != 1 || format[14] != 16 {
-		s.t.Errorf("pixel format message = %v", format)
+	bits := s.bits
+	if bits == 0 {
+		bits = 32
 	}
+	if format[0] != 0 || format[4] != bits || format[7] != 1 {
+		s.t.Errorf("pixel format message = %v, want %d bits of true colour", format, bits)
+	}
+	s.format = format
 	header := s.read(4)
 	for range binary.BigEndian.Uint16(header[2:]) {
 		encodings = append(encodings, int32(binary.BigEndian.Uint32(s.read(4))))
@@ -475,15 +486,21 @@ func pixels(n int, blue, green, red byte) []byte {
 // the update was applied.
 func scenario(t *testing.T, width, height int, send func(s *server, push func(update []byte))) *canvas {
 	t.Helper()
+	return scenarioWith(t, Config{}, width, height, send)
+}
+
+// scenarioWith is scenario for a client configured as config says.
+func scenarioWith(t *testing.T, config Config, width, height int, send func(s *server, push func(update []byte))) *canvas {
+	t.Helper()
 	sink := &canvas{}
 	var client *Client
 	var connectErr error
 	clientSide, serverSide := pair(t)
-	s := &server{t: t, conn: serverSide}
+	s := &server{t: t, conn: serverSide, bits: bitsOf(config.PixelFormat)}
 	go func() {
 		s.handshake("008", 1, "", width, height)
 	}()
-	client, connectErr = Connect(clientSide, Config{})
+	client, connectErr = Connect(clientSide, config)
 	if connectErr != nil {
 		t.Fatal(connectErr)
 	}
@@ -702,6 +719,7 @@ func TestClipboardBellAndInactiveClientAsksForNothing(t *testing.T) {
 }
 
 func TestInputMessages(t *testing.T) {
+	sink := &canvas{}
 	clientSide, serverSide := pair(t)
 	s := &server{t: t, conn: serverSide}
 	go s.handshake("008", 1, "", 20, 10)
@@ -709,6 +727,12 @@ func TestInputMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := run(client, sink)
+	s.readRequest()
+	// The clipboard goes out once the server has had its say on the clipboard
+	// protocol, which an update follows.
+	s.write(update(rect(0, 0, 1, 1, EncodingRaw, pixels(1, 4, 5, 6)...)))
+	s.readRequest()
 	go func() {
 		client.SendPointer(7, 9, 5)
 		client.SendKey(0xff0d, true)
@@ -723,6 +747,8 @@ func TestInputMessages(t *testing.T) {
 	if got := s.read(8 + 4); !bytes.Equal(got, append([]byte{6, 0, 0, 0, 0, 0, 0, 4}, "a\nb?"...)) {
 		t.Fatalf("clipboard = %q", got)
 	}
+	s.finish()
+	wait(t, done)
 }
 
 // slowConn delivers one byte per Read, the worst way a network can split what a

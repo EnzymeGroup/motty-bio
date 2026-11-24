@@ -125,6 +125,7 @@ var (
 	hitClipboardAllow          = tree.ID(shellHits, "clipboard-allow")
 	hitClipboardAlways         = tree.ID(shellHits, "clipboard-always")
 	hitShortcutReset           = tree.ID(shellHits, "shortcut-reset")
+	hitShortcutClearAll        = tree.ID(shellHits, "shortcut-clear-all")
 	hitShortcutCaptureDismiss  = tree.ID(shellHits, "shortcut-capture-dismiss")
 	hitShortcutCaptureClose    = tree.ID(shellHits, "shortcut-capture-close")
 	hitShortcutCaptureCancel   = tree.ID(shellHits, "shortcut-capture-cancel")
@@ -192,6 +193,7 @@ var (
 	hitForwardDialogCancel          = tree.ID(forwardsHits, "forward-dialog-cancel")
 	hitForwardDialogSubmit          = tree.ID(forwardsHits, "forward-dialog-submit")
 	hitForwardDialogLabel           = tree.ID(forwardsHits, "forward-dialog-label")
+	hitForwardDialogBindAddress     = tree.ID(forwardsHits, "forward-dialog-bind-address")
 	hitForwardDialogLocalPort       = tree.ID(forwardsHits, "forward-dialog-local-port")
 	hitForwardDialogDestination     = tree.ID(forwardsHits, "forward-dialog-destination")
 	hitForwardDialogDestinationPort = tree.ID(forwardsHits, "forward-dialog-destination-port")
@@ -758,6 +760,9 @@ type State struct {
 	terminalScrollback int
 	terminalFindPrefs  terminalFindPreferences
 	findSettingsUI     terminalFindSettingsUI
+	// terminalZoomSaveTimer coalesces a primary+wheel burst into one save once the
+	// gesture settles; see scheduleTerminalZoomSave.
+	terminalZoomSaveTimer *time.Timer
 	// interfaceTextSize is the body text size the user chose, in logical pixels:
 	// the size the whole window's text is drawn at, apart from the terminal's own
 	// font size.
@@ -1171,6 +1176,9 @@ func (state *State) Close() {
 	}
 	state.stopNetworkWatch()
 	state.closeWindowChrome()
+	// The window's save above already carried any applied font size, so a wheel
+	// save still waiting is dropped rather than fired after the store closes.
+	state.stopTerminalZoomSave()
 	state.closeAI()
 	state.closeHistory()
 	state.stopSyncTimer()
@@ -1237,7 +1245,7 @@ func New(options Options) *State {
 		terminalFindPrefs:  defaultTerminalFindPreferences,
 		tabTitleMode:       tabTitleConnection,
 		tabDoubleClick:     tabDoubleClickRename,
-		startupReuse:       true,
+		startupReuse:       false,
 		startupEnabled:     true,
 		// The defaults a fresh window starts from, before the saved state is
 		// read: the same ones a state file that says nothing gets.
@@ -1460,6 +1468,9 @@ func (state *State) EditorFor(hit gfx.ID) *text.Editor {
 	if editor := state.dashboardEditorFor(hit); editor != nil {
 		return editor
 	}
+	if editor := state.agentHostsEditor(hit); editor != nil {
+		return editor
+	}
 	if _, local, ok := state.decodePaneHit(hit); ok {
 		hit = local
 	}
@@ -1534,7 +1545,8 @@ func (state *State) EditorFor(hit gfx.ID) *text.Editor {
 			return &state.proxyBatch.query
 		}
 	case modalNewForward:
-		if hit == hitForwardDialogLabel || hit == hitForwardDialogLocalPort || hit == hitForwardDialogDestination || hit == hitForwardDialogDestinationPort {
+		if hit == hitForwardDialogLabel || hit == hitForwardDialogBindAddress || hit == hitForwardDialogLocalPort ||
+			hit == hitForwardDialogDestination || hit == hitForwardDialogDestinationPort {
 			return state.forwardEditor.field(forwardDialogField(hit))
 		}
 		if hit == hitForwardDialogRelay && state.forwardEditor.viaShell {
@@ -1726,6 +1738,9 @@ func (state *State) click(id gfx.ID, feedback bool) {
 		state.pressIconMotion(id)
 	}
 	if state.clickDashboard(id) {
+		return
+	}
+	if state.clickAgentHosts(id) {
 		return
 	}
 	if state.clickRemoteLogs(id) {
@@ -2077,6 +2092,9 @@ func (state *State) click(id gfx.ID, feedback bool) {
 		// no such page, so this is never its click.
 	case id == hitSettings || id == hitWindowSettings:
 		state.openSettings()
+	case id == hitShortcutClearAll:
+		state.shortcuts.unbindAll()
+		state.save()
 	case id == hitShortcutReset:
 		state.shortcuts = defaultShortcuts()
 		state.dropSnippetChordsTaken()
@@ -2444,6 +2462,12 @@ func (state *State) openHostDialog() {
 	state.hostDialogID = 0
 	state.dialogError = ""
 	state.modal = modalNewHost
+}
+
+// clearSearch clears the hosts page's search query and restores the visible host list.
+func (state *State) clearSearch() {
+	state.search = text.Editor{}
+	state.syncVisible()
 }
 
 // syncVisible rebuilds the list of hosts the search box lets through when the
@@ -3082,6 +3106,9 @@ func (state *State) key(event gfx.KeyEvent) gfx.EventResult {
 	if result := state.dashboardKey(event); result.Handled {
 		return result
 	}
+	if result := state.agentHostsKey(event); result.Handled {
+		return result
+	}
 	if result, handled := state.remoteProcessDetailsKey(event); handled {
 		return result
 	}
@@ -3569,8 +3596,7 @@ func (state *State) hostsKey(event gfx.KeyEvent) (gfx.EventResult, bool) {
 	switch event.Key {
 	case gfx.KeyEscape:
 		if event.Target == hitSearch && state.search.RuneCount() > 0 {
-			state.search = text.Editor{}
-			state.syncVisible()
+			state.clearSearch()
 			return handled, true
 		}
 	case gfx.KeyEnter:

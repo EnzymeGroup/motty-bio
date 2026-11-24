@@ -37,6 +37,7 @@ var (
 	hitDesktopReconnect  = tree.ID(desktopHits, "reconnect")
 	hitDesktopFullscreen = tree.ID(desktopHits, "fullscreen")
 	hitDesktopLatency    = tree.ID(desktopHits, "latency")
+	hitDesktopQuality    = tree.ID(desktopHits, "quality")
 )
 
 const (
@@ -110,6 +111,8 @@ type desktopView struct {
 	asked, pending desktopTarget
 	pendingSince   time.Duration
 	settling       bool
+	// qualityMenu is whether the quality menu of the bar is open.
+	qualityMenu bool
 }
 
 // imageDigest identifies the picture a desktop's clipboard was last given, so the
@@ -209,6 +212,15 @@ func (view *desktopView) logicalPerPixel() float32 {
 		return 1
 	}
 	return 1 / view.pixelScale
+}
+
+// oneToOne reports whether the picture is drawn one picture pixel to one device
+// pixel: at 100% whatever the server's size is, and in Fit mode for the picture a
+// resizing server makes the size of the pane. That is the size of the server's
+// own screen; on a scaled display, drawing the picture on logical pixels instead
+// magnified it and its edges fell outside the pane.
+func (view *desktopView) oneToOne() bool {
+	return !view.fit || view.pixelPerfect()
 }
 
 func (view *desktopView) close() {
@@ -331,17 +343,14 @@ func (view *desktopView) place(area gfx.Rect) (origin gfx.Point, scale float32) 
 	if width <= 0 || height <= 0 || area.Width <= 0 || area.Height <= 0 {
 		return gfx.Point{X: area.X, Y: area.Y}, 1
 	}
-	pixelPerfect := view.pixelPerfect()
-	scale = 1
-	switch {
-	case pixelPerfect:
-		scale = view.logicalPerPixel()
-	case view.fit:
+	oneToOne := view.oneToOne()
+	scale = view.logicalPerPixel()
+	if !oneToOne {
 		scale = min(area.Width/width, area.Height/height, desktopMaxScale)
 	}
 	shownWidth, shownHeight := width*scale, height*scale
 	axis := func(start, room, shown, pointer float32) float32 {
-		if pixelPerfect && view.fit {
+		if oneToOne && view.fit {
 			return start
 		}
 		if shown <= room {
@@ -356,7 +365,7 @@ func (view *desktopView) place(area gfx.Rect) (origin gfx.Point, scale float32) 
 		X: axis(area.X, area.Width, shownWidth, view.pointer.X),
 		Y: axis(area.Y, area.Height, shownHeight, view.pointer.Y),
 	}
-	if pixelPerfect && view.pixelScale > 0 {
+	if oneToOne && view.pixelScale > 0 {
 		snap := func(value float32) float32 {
 			return float32(math.Floor(float64(value)*float64(view.pixelScale)+0.5)) / view.pixelScale
 		}
@@ -1000,6 +1009,10 @@ func (state *State) clickDesktop(id gfx.ID) bool {
 		view.fit = false
 	case hitDesktopFullscreen:
 		state.toggleDesktopFullscreen(session)
+	case hitDesktopQuality:
+		if !view.ended {
+			view.qualityMenu = !view.qualityMenu
+		}
 	case hitDesktopCapture:
 		state.toggleCapture(view)
 	case hitDesktopCtrlAltDel:
@@ -1144,6 +1157,11 @@ func (state *State) declareDesktopTools(c ui.C, session *Session, view *desktopV
 		if view.ended {
 			fullscreen = fullscreen.Disabled(true)
 		}
+		quality := ui.Button(c, m.Quality).XSmall().Ghost().Hit(state.paneIdentity(session, hitDesktopQuality), m.Quality)
+		if view.ended {
+			quality = quality.Disabled(true)
+		}
+		state.declareDesktopQualityMenu(c, session, view, quality)
 	})
 }
 
@@ -1275,7 +1293,7 @@ func (state *State) paintDesktopPicture(d *ui.DrawContext, session *Session) {
 	canvas.Clip(area)
 	if view.width > 0 && view.height > 0 {
 		origin, scale := view.place(area)
-		if view.pixelPerfect() {
+		if view.oneToOne() {
 			view.surface.DrawPixels(canvas, origin)
 		} else {
 			view.surface.Draw(canvas, gfx.Rect{X: origin.X, Y: origin.Y, Width: float32(view.width) * scale, Height: float32(view.height) * scale})
@@ -1397,7 +1415,7 @@ func (state *State) desktopStripLeft(view *desktopView, session *Session) string
 	if view.width > 0 {
 		size := fmt.Sprintf(m.StripSizeFmt, view.width, view.height)
 		_, scale := view.place(view.area)
-		if view.pixelPerfect() {
+		if view.oneToOne() {
 			scale *= max(view.pixelScale, 1) // a picture drawn pixel for pixel is at 100%
 		}
 		if percent := int(math.Round(float64(scale) * 100)); percent != 100 {

@@ -112,6 +112,31 @@ func (session *Session) NetworkRTT() (time.Duration, time.Time) {
 	return session.client.NetworkRTT()
 }
 
+// applyQuality sets the picture quality a host asked for: the session's color
+// depth and the visual effects the server may render.
+func applyQuality(config *rdpcore.Options, opts desktop.Options) {
+	config.GFX = true
+	switch opts.ColorDepth {
+	case 16, 24:
+		config.Depth = uint16(opts.ColorDepth)
+		// The graphics pipeline draws in 32 bits per pixel whatever the session
+		// says, so a lower depth is only honoured by the plain bitmap updates the
+		// server falls back to without it, as Windows' own client does.
+		config.GFX = false
+	}
+	effects := desktop.DefaultEffects()
+	if opts.Effects != nil {
+		effects = *opts.Effects
+	}
+	config.Wallpaper = effects.Wallpaper
+	config.FontSmoothing = effects.FontSmoothing
+	config.DesktopComposition = effects.Composition
+	config.FullWindowDrag = effects.WindowDrag
+	config.MenuAnimations = effects.Animations
+	config.Theming = effects.Themes
+	config.CursorShadow = effects.CursorShadow
+}
+
 // Open connects to address through dial and starts reading the server. It
 // returns ErrAuthFailed when the server refused the account, and
 // ErrAuthRequired when there is no password to try.
@@ -149,16 +174,14 @@ func Open(ctx context.Context, dial desktop.Dialer, address string, opts desktop
 	config.Host, config.Port = host, port
 	config.Username, config.Domain, config.Password = opts.Username, opts.Domain, opts.Password
 	config.Width, config.Height = uint16(width), uint16(height)
-	if percent := scalePercent(opts.Scale); percent != 100 {
-		config.DesktopScaleFactor = percent
-	}
+	config.DesktopScaleFactor = scalePercent(opts.Scale)
 	config.Clipboard = opts.Clipboard
 	config.ConsoleSession = opts.Console
 	if opts.StandardSecurity {
 		config.Security = rdpcore.SecurityStandard
 	}
 	config.LegacyTLS = opts.LegacyTLS
-	config.GFX = true
+	applyQuality(config, opts)
 	config.NoAVC = true // no H.264 decoder: the server then sends RemoteFX or ClearCodec
 	if opts.Audio {
 		// The server picks one of the PCM formats the player accepts; opening

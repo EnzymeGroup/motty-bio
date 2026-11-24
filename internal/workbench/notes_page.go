@@ -216,11 +216,15 @@ func (s *State) declareNoteTreeRow(n *notesUI, i int) {
 	if c == nil {
 		return
 	}
-	if e.id == "" {
-		// The row a new folder or note is being named in.
+	if e.id == "" || e.id == n.view.inlineID {
+		// New items and existing items being renamed share the same field.
 		p.inline.Bind(&n.view.inline)
 		field := ui.TextFieldID(c, hitNoteInline, &p.inline, s.noteText("Name", "名称"), s.noteText("Name", "名称")).
 			FillWidth().Height(noteTreeRowHeight-4).MarginSides(0, 4, 2, 0)
+		if n.view.focus == hitNoteInline {
+			c.Canvas().RequestFocus(hitNoteInline)
+			n.view.focus = gfx.ID{}
+		}
 		if field.Submitted() {
 			c.After(func() { s.commitNoteInline() })
 		}
@@ -420,9 +424,13 @@ func (s *State) chooseNoteTreeRow(n *notesUI, e noteTreeEntry, side bool) {
 		return
 	}
 	if s.noteIndex(e.id) < 0 || e.id == n.selected {
+		if e.id == n.selected {
+			n.view.drawer = false
+			n.view.focus = hitNoteBody
+		}
 		return
 	}
-	if side {
+	if side && n != &s.notes {
 		if n.imageCancel != nil {
 			n.imageCancel()
 		}
@@ -548,7 +556,7 @@ func (s *State) declareNotesWorkspace(c ui.C) {
 	}
 	ui.Row(c).Fill().DrawOver(state.afterLayout).Children(func() {
 		ui.Column(c).Width(v.width).FillHeight().Children(func() {
-			s.declareNoteLibrary(c, n, v.width, false)
+			s.declareNoteLibrary(c, n, v.width)
 		})
 		// The old handle's FractionForKey moved it 5% of the room per arrow.
 		state.library.StepFraction = .05
@@ -569,7 +577,7 @@ func (s *State) declareNoteDrawer(c ui.C, n *notesUI) {
 	ui.Drawer(c, &open, s.noteText("Note library", "笔记目录"), ui.DrawerSpec{
 		Side: ui.DrawerLeft, Size: extent,
 	}, func() {
-		s.declareNoteLibrary(c, n, extent, true)
+		s.declareNoteLibrary(c, n, extent)
 	}, nil)
 	if !open {
 		v.drawer = false
@@ -578,7 +586,7 @@ func (s *State) declareNoteDrawer(c ui.C, n *notesUI) {
 
 // declareNoteLibrary declares the library pane: its tool row, its search, and
 // its tree.
-func (s *State) declareNoteLibrary(c ui.C, n *notesUI, width float32, drawer bool) {
+func (s *State) declareNoteLibrary(c ui.C, n *notesUI, width float32) {
 	p, v := &n.page, &n.view
 	p.c = c
 	rows := v.treeScratch.rows
@@ -588,7 +596,6 @@ func (s *State) declareNoteLibrary(c ui.C, n *notesUI, width float32, drawer boo
 		icon  gfx.Icon
 	}{
 		{hitNoteSearchToggle, s.noteText("Search notes", "搜索笔记"), icons.Search},
-		{hitNoteAdd, s.noteText("New note", "新建笔记"), icons.SquarePen},
 		{hitNoteFolderAdd, s.noteText("New folder", "新建文件夹"), icons.FolderPlus},
 		{hitNoteImport, s.noteText("Import Markdown", "导入 Markdown"), icons.Upload},
 		{hitNoteLinkFile, s.noteText("Link Markdown file", "链接 Markdown 文件"), icons.Link},
@@ -607,6 +614,8 @@ func (s *State) declareNoteLibrary(c ui.C, n *notesUI, width float32, drawer boo
 			s.declareNoteToolbarButton(c, a.id, a.label, a.icon, disabled)
 		}
 	})
+	ui.Button(c, s.noteText("New note", "新建笔记")).Icon(icons.SquarePen).
+		FillWidth().Height(36).MarginSides(8, 8, 0, 8).Hit(hitNoteAdd, s.noteText("New note", "新建笔记"))
 	if v.searchOpen {
 		p.query.Bind(&n.query)
 		field := ui.TextFieldID(c, hitNoteSearch, &p.query, s.noteText("Search title, body and tags", "搜索标题、正文和标签"), s.noteText("Search title, body and tags", "搜索标题、正文和标签")).
@@ -619,16 +628,16 @@ func (s *State) declareNoteLibrary(c ui.C, n *notesUI, width float32, drawer boo
 	area := ui.Column(c).Grow(1).FillWidth().MarginSides(6, 6, 6, 6).
 		HitWith(hitNoteListScroll, s.noteText("Scroll notes", "滚动笔记"), gfx.HitOptions{Role: gfx.RoleGroup, SkipFocus: true})
 	area.Children(func() {
-		ui.Tree(c, &p.tree, len(rows), p.label, p.content).Grow(1).FillWidth().Scrollbars().
-			Label(s.noteText("Scroll notes", "滚动笔记"))
-		s.noteTreeChanges(n, drawer)
 		if len(rows) == 0 {
-			message := s.noteText("No notes yet. Create one above.", "暂无笔记，可点击上方新建。")
+			message := s.noteText("Your first working note starts here.", "第一条工作记录，从这里开始。")
 			if n.query.String() != "" {
 				message = s.noteText("No matching notes.", "没有匹配的笔记。")
 			}
-			ui.Text(c, message).FontSize(12).Color(s.pal.muted).MarginSides(8, 0, 0, 0)
+			ui.Text(c, message).FontSize(12).Color(s.pal.muted).FillWidth().Ellipsis().MarginSides(8, 0, 0, 0)
 		}
+		ui.Tree(c, &p.tree, len(rows), p.label, p.content).Grow(1).FillWidth().Scrollbars().
+			Label(s.noteText("Scroll notes", "滚动笔记"))
+		s.noteTreeChanges(n, false)
 	})
 }
 
@@ -686,8 +695,19 @@ func (s *State) declareNoteEditor(c ui.C, n *notesUI, width float32, window bool
 		ui.Row(c).Height(28).MarginSides(8, 16, 0, 18).Children(func() {
 			s.declareNoteToolbarButton(c, hitNoteTreeToggle, s.noteText("Toggle library", "显示 / 隐藏目录"), icons.PanelLeft, false)
 		})
-		ui.Text(c, s.noteText("Select a note or create one to begin.", "选择笔记，或新建一篇笔记。")).
-			FontSize(16).Color(s.pal.muted).MarginSides(88, 16, 0, 18)
+		theme := s.Theme()
+		contentWidth := min(max(0, width-40), 384)
+		ui.Column(c).Grow(1).FillWidth().Center().Pad(20).Clip().Children(func() {
+			ui.Column(c).Width(contentWidth).Items(ui.Center).Children(func() {
+				ui.Column(c).Size(40, 40).Center().Radius(theme.Metrics.RadiusSurface).Background(theme.Muted).Children(func() {
+					ui.Icon(c, icons.Notebook).Size(24, 24).Color(theme.Foreground)
+				})
+				ui.Text(c, s.noteText("Start with a note", "从一篇笔记开始")).
+					FontSize(18).Weight(gfx.WeightMedium).Color(theme.Foreground).FillWidth().TextCenter().MarginSides(16, 0, 0, 0)
+				ui.Paragraph(c, s.noteText("Select a note from the library or create a new one to capture commands, investigations, and solutions.", "从目录选择一篇笔记，或创建新笔记来记录命令、排查过程与解决方案。"), 6).
+					FontSize(13).LineHeight(21).Color(theme.MutedForeground).FillWidth().TextCenter().MarginSides(8, 0, 0, 0)
+			})
+		})
 		return
 	}
 	s.declareNoteEditorHeader(c, n, width, false)

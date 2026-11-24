@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"math"
 	"strings"
 
 	"github.com/vivaui/viva/app"
@@ -595,6 +596,7 @@ func (state *State) declareShell(c ui.C) {
 		state.declareDesktopBody(c, session, gfx.Rect{Width: state.viewport.Width, Height: state.viewport.Height})
 		state.declareTransferProgressCards(c)
 		state.declareDashboardDialog(c)
+		state.declareAgentHostsDialog(c)
 		state.declareDashboardAddMenu(c)
 		return
 	}
@@ -682,6 +684,7 @@ func (state *State) declareShell(c ui.C) {
 	// The dashboard's own dialog and its hosts-page add menu are page controls
 	// too: they are open over whatever section asked for them.
 	state.declareDashboardDialog(c)
+	state.declareAgentHostsDialog(c)
 	state.declareDashboardAddMenu(c)
 	// The drag overlay is hitless and paints over the page on the drag layer.
 	state.declareTabDragOverlays(c)
@@ -1558,8 +1561,14 @@ func (state *State) declareHostsToolbar(c ui.C, width float32, plan hostsHeaderP
 				state.chrome.searchBound = true
 			}
 			state.chrome.searchField.Disabled = state.hostSort.enabled
-			ui.TextFieldID(c, hitSearch, &state.chrome.searchField, m.NavSearch, m.SearchPlaceholder).
+			field := ui.TextFieldID(c, hitSearch, &state.chrome.searchField, m.NavSearch, m.SearchPlaceholder).
 				Icon(lucideIcons[iconSearch]).FillWidth().Height(toolbarHeight).Disabled(state.hostSort.enabled)
+			if state.search.RuneCount() > 0 && !state.hostSort.enabled {
+				field = field.Action(lucideIcons[iconClose], m.SearchClear)
+				if field.ActionClicked() {
+					state.clearSearch()
+				}
+			}
 		})
 		b.connect = state.declareButtonSized(c, hitConnect, m.Connect, plan.connectIcon, false, false, state.typedQuery() != "", toolbarFont, plan.condensed).Size(plan.connectWidth, toolbarHeight).MarginSides(0, buttonGap, 0, 0)
 		ui.Spacer(c)
@@ -3384,25 +3393,51 @@ func (state *State) declareMoveHostGroupDialog(c ui.C) {
 	})
 }
 
+// The delete-a-group dialog's body is the two choice rows; a refusal notice,
+// when shown, adds its measured lines above them.
+const (
+	groupDeleteChoiceRows = float32(130)
+	groupDeleteNoticeLine = float32(20)
+	groupDeleteNoticeGap  = float32(4)
+)
+
 // declareHostGroupDeleteDialog declares the delete-group variant of the group
 // dialog: two radio choices for what happens to the hosts in it.
 func (state *State) declareHostGroupDeleteDialog(c ui.C) {
 	m := state.messages.HostGroupActions
-	layout := dialogContentRect(c.Canvas(), *c.Theme(), dialogViewport(c), 480, "", 130)
+	body := groupDeleteChoiceRows
+	if state.dialogError != "" {
+		// The reason can name a host, so it may wrap: give it as many lines as its
+		// words take at the body's width, measured the way it is drawn.
+		probe := dialogContentRect(c.Canvas(), *c.Theme(), dialogViewport(c), 480, "", body)
+		var scratch [8]string
+		lines := c.Canvas().WrapLines(scratch[:0], state.dialogError, metrics.FontSizeS, gfx.WeightMedium, max(probe.Body.Width, 1), math.MaxInt32)
+		body += float32(len(lines))*groupDeleteNoticeLine + groupDeleteNoticeGap
+	}
+	layout := dialogContentRect(c.Canvas(), *c.Theme(), dialogViewport(c), 480, "", body)
 	description := elide(c.Canvas(), state.groupActions.path, c.Theme().Metrics.FontSizeM, gfx.WeightRegular, layout.Header.Width)
 	viewport := dialogViewport(c)
-	height := dialogContentHeight(c.Canvas(), *c.Theme(), viewport, 480, description, 130)
+	height := dialogContentHeight(c.Canvas(), *c.Theme(), viewport, 480, description, body)
 	dialog := ui.Dialog(c, ui.DialogSpec{
 		Title: m.Delete, Description: description, Width: 480, Height: height, Layer: dialogLayer,
 		Scope: dialogScope, DismissID: hitMoveGroupDismiss, CloseID: hitMoveGroupClose, InitialFocusID: hitGroupDeleteParent,
 	})
 	dialog.Body(func() {
 		choices := state.groupDeleteChoices()
-		// The body's 130 pixels are the two choices' rows, as the hand-painted
-		// group stretched them: a radio centres its circle and label in the row.
-		ui.RadioGroup(c).Fill().Children(func() {
-			ui.RadioID(c, hitGroupDeleteParent, &state.groupActions.ungroup, false, choices[0]).Grow(1)
-			ui.RadioID(c, hitGroupDeleteUngroup, &state.groupActions.ungroup, true, choices[1]).Grow(1)
+		ui.Column(c).Fill().Children(func() {
+			// A deletion the parent group cannot take is refused, and the dialog
+			// is the only place that can say why: it stays open, so the reason
+			// goes here rather than into the status line behind the scrim.
+			if state.dialogError != "" {
+				ui.Paragraph(c, state.dialogError, 0).FontSize(metrics.FontSizeS).Weight(gfx.WeightMedium).Color(state.pal.danger).LineHeight(groupDeleteNoticeLine)
+			}
+			// The body's remaining 130 pixels are the two choices' rows, as the
+			// hand-painted group stretched them: a radio centres its circle and
+			// label in the row.
+			ui.RadioGroup(c).Fill().Children(func() {
+				ui.RadioID(c, hitGroupDeleteParent, &state.groupActions.ungroup, false, choices[0]).Grow(1)
+				ui.RadioID(c, hitGroupDeleteUngroup, &state.groupActions.ungroup, true, choices[1]).Grow(1)
+			})
 		})
 	})
 	dialog.Footer(func() {
@@ -3443,32 +3478,56 @@ func (state *State) declareMoveGroupBody(c ui.C, label string, viewport gfx.Rect
 	})
 }
 
-// hostSystemChoices are the systems whose badge a host can be given, in the order
-// the list shows them. The names are the systems' own, the same in every language.
+// hostSystemChoices are the systems whose badge a host can be given, listed A-Z
+// by name. The names are the systems' own, the same in every language.
 var hostSystemChoices = [...]struct {
 	system sshconn.RemoteSystem
 	name   string
 }{
-	{sshconn.SystemUbuntu, "Ubuntu"}, {sshconn.SystemDebian, "Debian"}, {sshconn.SystemFedora, "Fedora"},
-	{sshconn.SystemArch, "Arch Linux"}, {sshconn.SystemCentOS, "CentOS"}, {sshconn.SystemRedHat, "Red Hat"},
-	{sshconn.SystemRocky, "Rocky Linux"}, {sshconn.SystemAlma, "AlmaLinux"}, {sshconn.SystemOpenSUSE, "openSUSE"},
-	{sshconn.SystemKali, "Kali Linux"}, {sshconn.SystemMint, "Linux Mint"}, {sshconn.SystemRaspberryPi, "Raspberry Pi OS"},
-	{sshconn.SystemAlpine, "Alpine"}, {sshconn.SystemNixOS, "NixOS"}, {sshconn.SystemGentoo, "Gentoo"},
-	{sshconn.SystemManjaro, "Manjaro"},
-	{sshconn.SystemSynology, "Synology DSM"}, {sshconn.SystemQNAP, "QNAP QTS"}, {sshconn.SystemFnOS, "fnOS"},
-	{sshconn.SystemTrueNAS, "TrueNAS"}, {sshconn.SystemUnraid, "Unraid"},
-	{sshconn.SystemOpenMediaVault, "OpenMediaVault"}, {sshconn.SystemProxmox, "Proxmox VE"},
-	{sshconn.SystemOpenWrt, "OpenWrt"}, {sshconn.SystemDeepin, "deepin"}, {sshconn.SystemUOS, "UOS"},
+	{sshconn.SystemAIX, "AIX"},
+	{sshconn.SystemAlibabaCloudLinux, "Alibaba Cloud Linux"},
+	{sshconn.SystemAlma, "AlmaLinux"},
+	{sshconn.SystemAlpine, "Alpine"},
+	{sshconn.SystemAmazonLinux, "Amazon Linux"},
+	{sshconn.SystemAnolis, "Anolis OS"},
+	{sshconn.SystemArch, "Arch Linux"},
+	{sshconn.SystemAzureLinux, "Azure Linux"},
+	{sshconn.SystemCentOS, "CentOS"},
+	{sshconn.SystemDebian, "Debian"},
+	{sshconn.SystemDeepin, "deepin"},
+	{sshconn.SystemElementary, "elementary OS"},
+	{sshconn.SystemFedora, "Fedora"},
+	{sshconn.SystemFnOS, "fnOS"},
+	{sshconn.SystemFreeBSD, "FreeBSD"},
+	{sshconn.SystemGentoo, "Gentoo"},
+	{sshconn.SystemKali, "Kali Linux"},
 	{sshconn.SystemKylin, "Kylin"},
+	{sshconn.SystemLinux, "Linux"},
+	{sshconn.SystemMint, "Linux Mint"},
+	{sshconn.SystemDarwin, "macOS"},
+	{sshconn.SystemManjaro, "Manjaro"},
+	{sshconn.SystemNixOS, "NixOS"},
+	{sshconn.SystemOpenMediaVault, "OpenMediaVault"},
+	{sshconn.SystemOpenSUSE, "openSUSE"},
+	{sshconn.SystemOpenWrt, "OpenWrt"},
+	{sshconn.SystemOracleLinux, "Oracle Linux"},
 	{sshconn.SystemPopOS, "Pop!_OS"},
-	{sshconn.SystemZorin, "Zorin OS"}, {sshconn.SystemElementary, "elementary OS"},
-	{sshconn.SystemVoid, "Void Linux"}, {sshconn.SystemSlackware, "Slackware"},
-	{sshconn.SystemAnolis, "Anolis OS"}, {sshconn.SystemTencentOS, "TencentOS"},
-	{sshconn.SystemAmazonLinux, "Amazon Linux"}, {sshconn.SystemAzureLinux, "Azure Linux"},
-	{sshconn.SystemOracleLinux, "Oracle Linux"}, {sshconn.SystemAlibabaCloudLinux, "Alibaba Cloud Linux"},
-	{sshconn.SystemESXi, "VMware ESXi"}, {sshconn.SystemAIX, "AIX"},
-	{sshconn.SystemFreeBSD, "FreeBSD"}, {sshconn.SystemLinux, "Linux"},
-	{sshconn.SystemWindows, "Windows"}, {sshconn.SystemDarwin, "macOS"},
+	{sshconn.SystemProxmox, "Proxmox VE"},
+	{sshconn.SystemQNAP, "QNAP QTS"},
+	{sshconn.SystemRaspberryPi, "Raspberry Pi OS"},
+	{sshconn.SystemRedHat, "Red Hat"},
+	{sshconn.SystemRocky, "Rocky Linux"},
+	{sshconn.SystemSlackware, "Slackware"},
+	{sshconn.SystemSynology, "Synology DSM"},
+	{sshconn.SystemTencentOS, "TencentOS"},
+	{sshconn.SystemTrueNAS, "TrueNAS"},
+	{sshconn.SystemUbuntu, "Ubuntu"},
+	{sshconn.SystemUnraid, "Unraid"},
+	{sshconn.SystemUOS, "UOS"},
+	{sshconn.SystemESXi, "VMware ESXi"},
+	{sshconn.SystemVoid, "Void Linux"},
+	{sshconn.SystemWindows, "Windows"},
+	{sshconn.SystemZorin, "Zorin OS"},
 }
 
 // hostSystemDisplayName is the system's own name, the same in every language.
